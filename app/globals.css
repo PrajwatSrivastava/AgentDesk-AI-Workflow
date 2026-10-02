@@ -1,26 +1,92 @@
 @import "tailwindcss";
 
-:root {
-  --background: #ffffff;
-  --foreground: #171717;
+/* Each token holds both themes via light-dark(); color-scheme on <html> picks one. */
+@theme {
+  --color-paper: light-dark(#fbfbfa, #111214);
+  --color-surface: light-dark(#ffffff, #1a1b1e);
+  --color-ink: light-dark(#1a1d21, #ececeb);
+  --color-muted: light-dark(#6b6f76, #9ca0a8);
+  --color-rule: light-dark(#e4e4e0, #2b2d32);
+
+  --color-waiting: light-dark(#c6841b, #e3a74a);
+  --color-done: light-dark(#3f7a52, #62b47d);
+  --color-failed: light-dark(#a8412f, #e47763);
+  --color-accent: light-dark(#5c6ff0, #8492ff);
+
+  --color-waiting-soft: light-dark(#fdf6e9, #36290f);
+  --color-done-soft: light-dark(#eef5f0, #15281b);
+  --color-failed-soft: light-dark(#fbeeec, #391b16);
+  --color-accent-soft: light-dark(#eef0fe, #1e2246);
+
+  --font-sans: var(--font-instrument-sans), ui-sans-serif, system-ui, sans-serif;
+  --font-mono: var(--font-jetbrains-mono), ui-monospace, monospace;
 }
 
-@theme inline {
-  --color-background: var(--background);
-  --color-foreground: var(--foreground);
-  --font-sans: var(--font-geist-sans);
-  --font-mono: var(--font-geist-mono);
+/* data-theme comes from the theme cookie on the server */
+html {
+  color-scheme: light;
 }
-
-@media (prefers-color-scheme: dark) {
-  :root {
-    --background: #0a0a0a;
-    --foreground: #ededed;
-  }
+html[data-theme="dark"] {
+  color-scheme: dark;
+}
+html[data-theme="system"] {
+  color-scheme: light dark;
 }
 
 body {
-  background: var(--background);
-  color: var(--foreground);
-  font-family: Arial, Helvetica, sans-serif;
+  background: var(--color-paper);
+  color: var(--color-ink);
+  font-family: var(--font-sans);
+  -webkit-font-smoothing: antialiased;
+}
+
+.bg-lavender {
+  background: linear-gradient(
+    135deg,
+    light-dark(#eef0fa, #14151b) 0%,
+    light-dark(#f3f0fa, #16141c) 50%,
+    light-dark(#f5f0ff, #18151f) 100%
+  );
+}
+
+/* Rows set --i inline for the stagger */
+@keyframes step-in {
+  from {
+    opacity: 0;
+    transform: translateY(4px);
+  }
+  to {
+    opacity: 1;
+    transform: none;
+  }
+}
+
+.step-in {
+  animation: step-in 220ms ease-out backwards;
+  animation-delay: calc(var(--i, 0) * 40ms);
+}
+
+@keyframes menu-in {
+  from {
+    opacity: 0;
+    transform: translateY(6px) scale(0.98);
+  }
+}
+
+.menu-in {
+  animation: menu-in 140ms ease-out;
+  transform-origin: bottom left;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .step-in,
+  .menu-in {
+    animation: none;
+  }
+}
+
+:focus-visible {
+  outline: 2px solid var(--color-accent);
+  outline-offset: 2px;
+  border-radius: 2px;
 }

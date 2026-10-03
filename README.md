@@ -50,45 +50,20 @@ New accounts start with six agents, each with ready-made workflows:
 ### From a sentence to a running workflow
 
 ```mermaid
-flowchart TD
-    A["Describe a job<br/>in plain English"] --> B["Gemini compiles it<br/>into a JSON spec"]
-    B --> C{"Valid against the schema<br/>and integration catalog?"}
-    C -- "no: one repair attempt" --> B
-    C -- yes --> D["Preview the steps"]
-    D --> E["Test run<br/>(reads only, sends nothing)"]
-    E --> F["Switch it on"]
-    F --> G["Runs on a schedule,<br/>from a webhook or by hand"]
+flowchart LR
+    A["Describe<br/>a job"] --> B["Gemini<br/>compiles it"]
+    B --> C{"Valid?"}
+    C -- "no: repair" --> B
+    C -- yes --> D["Preview"]
+    D --> E["Test run<br/>(sends nothing)"]
+    E --> F["Switch on"]
+    F --> G["Runs on schedule,<br/>webhook or by hand"]
 ```
 
 The LLM writes the workflow definition once. After that a plain executor
 replays it on every run, so fetched content can change what a summary says but
 can't add a step or change where results are sent. That keeps prompt injection
 contained to the text of a summary.
-
-### Inside a run
-
-A typical workflow, as the executor walks it:
-
-```mermaid
-flowchart TD
-    T["Trigger: schedule, webhook or Run now"] --> Q{"Runs left today?"}
-    Q -- no --> X["Refused (25 runs per day)"]
-    Q -- yes --> S["Load the owner's connections"]
-    S --> A1["Fetch: Hacker News, RSS,<br/>GitHub, weather..."]
-    A1 --> F1{"Filter condition met?"}
-    F1 -- no --> SK["Run ends as skipped"]
-    F1 -- yes --> AI["Gemini summarises<br/>into a fixed JSON shape"]
-    AI --> HU{"Needs approval?"}
-    HU -- yes --> P["Pause and post an approval<br/>link to Slack"]
-    P -- reject --> SK
-    P -- "approve (optionally edited)" --> OUT
-    HU -- no --> OUT["Send: Slack, Notion<br/>or email"]
-    OUT --> OK["Run succeeded"]
-```
-
-Every step is recorded with its resolved input, output and duration, and AI
-steps keep the exact prompt that was sent, so any run can be explained from
-the run page.
 
 ### Architecture
 
@@ -191,51 +166,21 @@ it's saved.
 | `DATABASE_URL` | yes | Postgres connection string |
 | `GEMINI_API_KEY` | yes | free tier available |
 | `GEMINI_COMPILER_MODELS`, `GEMINI_SUMMARY_MODELS` | no | comma-separated model fallback lists |
-| `ENCRYPTION_KEY` | yes | 64 hex chars from `npm run keygen`; rotate with `npm run reencrypt` |
+| `ENCRYPTION_KEY` | yes | 64 hex chars from `npm run keygen` |
 | `RESEND_FROM` | for email | sender address on a domain verified in Resend |
 | `APP_URL` | no | base URL for approval links; defaults to `VERCEL_URL`, then localhost |
 | `DEMO_MODE` | no | treats schedule units as seconds, for demos |
 | `TICK_SECRET` | in production | bearer token for `/api/tick` |
 
-Upgrading a database from before accounts existed:
-`npm run migrate:users -- you@example.com` moves all existing data to an owner
-account with that email. Sign up with the same email to claim it.
-
 ### Scripts
 
 ```bash
-npm run fixtures                    # compile all fixtures, report pass rate and cost
-npm run fixtures -- "top stories"   # just one
+npm run dev         # start the app on http://localhost:3000
+npm run db:push     # create or update the database tables
+npm run fixtures    # compile 17 sample requests on Gemini, report pass rate and cost
 npm run typecheck
 npm run lint
-npm run db:studio
-
-# Run the engine from the command line (dry run unless --live)
-npm run verify -- you@example.com "Watch Hacker News" --fresh
-npm run verify -- you@example.com "Draft a post" --approve --edit "…"
-npm run verify -- you@example.com "Watch Hacker News" --live
-npm run build-flow -- you@example.com market-researcher "Every morning, …"
-
-# Per-account changes
-npm run set-var -- you@example.com market-researcher watchTerm "Drizzle ORM"
-npm run seed -- you@example.com            # add missing starter agents
-npm run seed -- you@example.com --prune    # and delete retired ones
-npm run run-limit -- you@example.com unlimited   # or: default
-
-# Admin, across all accounts
-npm run workflows                  # check stored specs against the registry
-npm run workflows -- --delete <id>
-npm run agents                     # list agents by owner
-npm run agents -- --delete <id>
-
-# Rotate the encryption key (all rows or none)
-NEW_ENCRYPTION_KEY=<64 hex> npm run reencrypt
-
-# Call one integration directly, no LLM or database
-npm run probe -- hackernews top_stories '{"limit":5}'
 ```
-
-`--fresh` clears the last-run time so the run fetches a full window.
 
 ## Integrations
 

@@ -69,7 +69,7 @@ Operators: \`eq\`, \`neq\`, \`gt\`, \`gte\`, \`lt\`, \`lte\`, \`contains\`, \`is
 11. **Confirmed details override anything you would infer.** When the message lists them: follow the delivery choice exactly, even when it says "(set up later)"; "Just show me in the app" means no sending step at all (the run page shows the last step's output); "Only when I run it" means a \`manual\` trigger; for approval, "No" means no \`human\` step, "always ask me first" means a \`human\` step without \`when\`, and "Only when something looks important" means a \`human\` step whose \`when\` tests a field such as \`important\` from the preceding \`ai\` step.
 12. **Web pages.** For one page at a known URL (an article, an announcement) use \`web.read_page\`. For a page that lists entries with their own links (blog posts, releases, news) use \`web.list_items\`. Prefer \`rss.fetch_feed\` when the site has a feed. When entries on a page have details to pull out (deadlines, eligibility, prices), read the page with \`web.read_page\` and extract records with an \`ai\` step. Leave \`selector\` out unless the user gives one.
 13. **Web search.** When the job needs current information from the web and no URL is given, start with \`tavily.search\`. Set \`includePageText\` to true when the answer needs details from inside the pages (dates, eligibility), with \`limit\` 5 or less. Phrase \`query\` like a search engine query. For news, set \`topic\` to \`news\` and \`timeRange\` to match how often it runs: \`day\` for daily or more often, otherwise \`week\`.
-14. **Lists for people.** Never put \`.items\` or \`.records\` into a message. Pass the list through \`data.tidy_list\` (drop incomplete entries, keep upcoming dates, remove duplicates, sort, limit) and deliver \`{{tidy.text}}\`. Give \`format\` a single-brace template naming the record fields, e.g. \`"• {name}, deadline {deadline}: {url}"\`. For news, sort newest first: \`dateField\` and \`sortBy\` set to the date field, \`order\` \`desc\`.
+14. **Lists for people.** Never put \`.items\` or \`.records\` into a message. Pass the list through \`data.tidy_list\` (drop incomplete entries, keep upcoming dates, remove duplicates, sort, limit) and deliver \`{{tidy.text}}\`. Give \`format\` a single-brace template naming the record fields, e.g. \`"• {name}, deadline {deadline}: {url}"\`. For news, sort newest first: \`dateField\` and \`sortBy\` set to the date field, \`order\` \`desc\`. Dates are filtered here, not in the \`ai\` step: the extraction prompt lists every entry with the date it states and never judges what is still open or upcoming, because \`keep: "upcoming"\` does that reliably.
 15. After \`data.tidy_list\`, filter on \`{{tidy.count}}\` instead of on the raw source, so nothing is sent when no entry survives cleaning.
 16. **Several topics.** "News on X and Y" means news on each topic, not only stories where they meet. Give each topic its own search (at most 3), then one \`ai\` step that reads all the results and keeps items about any of the topics, labelled with the topic. Combine topics into one query only when the user asks about the overlap ("how X affects Y") or the confirmed details say so. An extraction prompt keeps everything that matches what the user asked for; it must not add conditions of its own, or the list comes back empty.
 
@@ -245,7 +245,11 @@ export function compilerUserMessage(params: {
         .join("\n")
     : "- none configured";
 
-  return `Agent: ${params.agentName} — ${params.agentRole}
+  // In the user message, not the system prompt, so the system prompt stays cacheable.
+  // Without it, search queries aim at the model's training year ("2024 deadlines").
+  return `Today's date: ${new Date().toISOString().slice(0, 10)}
+
+Agent: ${params.agentName} — ${params.agentRole}
 
 Available agent values:
 ${varLines}

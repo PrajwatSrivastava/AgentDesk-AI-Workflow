@@ -46,10 +46,13 @@ export const runAi: StepHandler<"ai"> = async (step, ctx) => {
     return keys ? [[field, keys]] : [];
   });
 
+  // Models assume the date they were trained, so "still open" or "next week" would be judged wrongly.
+  // Last in the system prompt, so the rest of it stays a cacheable prefix.
+  const today = (ctx.trigger.firedAt ?? new Date().toISOString()).slice(0, 10);
   const result = await generateObject({
     tier: "summary",
     schema,
-    system: SYSTEM,
+    system: `${SYSTEM}\n\nToday's date is ${today}.`,
     messages: [{ role: "user", content: prompt }],
     // Extraction into records needs room for many entries
     maxTokens: lists.length ? 8192 : 4096,

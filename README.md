@@ -223,23 +223,6 @@ send nothing.
 - Approval links, webhook triggers and `/api/tick` work without a session
   because each carries its own secret.
 
-## Known limitations
-
-- No password reset or email verification.
-- Sign-in attempts are slowed down but not rate limited.
-- A Notion personal access token can reach every page its owner can.
-- No automatic retries. `last_run_at` moves only on a completed pass
-  (succeeded, filtered out, or paused for approval), to the time that run
-  started, so a failed run's window is retried.
-- Steps are a flat list of up to eight, with no branching.
-- All email goes out from `RESEND_FROM`, using each user's own Resend key.
-  Unless that address is `onboarding@resend.dev`, other users' keys will be
-  refused for the sender domain. A per-user sender setting would fix this.
-- Server actions run one at a time per tab, so a long manual run blocks the
-  dashboard poll until it finishes.
-- `drizzle-kit` bundles an old `esbuild` with a dev-server advisory; it's only
-  used from the CLI.
-
 ## License
 
 [MIT](LICENSE) © 2026 Prajwat Srivastava

@@ -4,6 +4,10 @@
 ![Next.js 16](https://img.shields.io/badge/Next.js-16-black)
 ![TypeScript](https://img.shields.io/badge/TypeScript-strict-3178c6)
 ![Gemini](https://img.shields.io/badge/LLM-Gemini-8e75b2)
+[![Live demo](https://img.shields.io/badge/demo-live-brightgreen)](https://agent-desk-ai-workflow.vercel.app/)
+
+**Live app: [agent-desk-ai-workflow.vercel.app](https://agent-desk-ai-workflow.vercel.app/)**
+(sign up with any email to try it)
 
 Describe a recurring job in plain English and get a workflow you can read,
 test and schedule. For example:

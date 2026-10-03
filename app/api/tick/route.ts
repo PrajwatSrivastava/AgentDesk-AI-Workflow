@@ -3,6 +3,9 @@ import { fail, handle, ok } from "@/lib/api";
 import { env } from "@/lib/env";
 import { equalStrings } from "@/lib/session";
 
+// Due runs execute inside the request
+export const maxDuration = 300;
+
 // Scheduler endpoint for an external cron (Vercel Hobby cron is daily only), locked by TICK_SECRET.
 // The dashboard ticks through a server action so the secret never reaches the client.
 export async function POST(request: Request): Promise<Response> {

@@ -72,7 +72,7 @@ export async function loadAccountSummary(user: CurrentUser): Promise<AccountSumm
   const apps = appsNeedingConnection();
   const appsReady = apps.filter((app) => {
     const saved = states.get(app.key);
-    return saved !== undefined && missingSettings(app.settings, saved).length === 0;
+    return saved !== undefined && !saved.lastError && missingSettings(app.settings, saved.settings).length === 0;
   }).length;
 
   return {

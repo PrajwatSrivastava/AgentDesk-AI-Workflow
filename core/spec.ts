@@ -32,13 +32,21 @@ export const Condition = z.object({
 });
 export type Condition = z.infer<typeof Condition>;
 
-// Flat field->type map. Nested schemas are harder for the model to emit correctly.
+// Flat field->type map. Nested schemas are harder for the model to emit correctly, so the one
+// list type is a list of records with string fields only: "{name,deadline,url}[]".
+// The pattern stays simple because it is also sent to Gemini as part of the compiler's schema.
 const outputFieldType = z
   .string()
   .regex(
-    /^(string|number|boolean|string\[\]|[a-z0-9_]+(\|[a-z0-9_]+)+)$/,
-    'must be "string", "number", "boolean", "string[]", or a pipe enum like "low|high"',
+    /^(string|number|boolean|string\[\]|[a-z0-9_]+(\|[a-z0-9_]+)+|\{[a-z][a-z0-9_]*(, ?[a-z][a-z0-9_]*)*\}\[\])$/,
+    'must be "string", "number", "boolean", "string[]", a pipe enum like "low|high", or a list of records like "{name,url}[]"',
   );
+
+/** Field names of a list-of-records type such as "{name,url}[]", else null. At most 8 fields. */
+export function recordListFields(type: string): string[] | null {
+  const match = /^\{(.+)\}\[\]$/.exec(type);
+  return match ? match[1].split(",").map((field) => field.trim()).filter(Boolean).slice(0, 8) : null;
+}
 
 const OutputSchema = z.record(z.string(), outputFieldType);
 export type OutputSchema = z.infer<typeof OutputSchema>;
@@ -173,6 +181,10 @@ function fieldTypeToZod(type: string): z.ZodTypeAny {
     case "string[]":
       return z.array(z.string());
     default: {
+      const fields = recordListFields(type);
+      if (fields) {
+        return z.array(z.object(Object.fromEntries(fields.map((field) => [field, z.string()])))).max(40);
+      }
       const options = type.split("|");
       return z.enum(options as [string, ...string[]]);
     }

@@ -13,6 +13,7 @@ import { IntegrationError } from "@/integrations/http";
 import { findAction } from "@/integrations/registry";
 import { decryptSecret } from "@/lib/crypto";
 import { claimDailyRun, DailyLimitError, dailyLimitFor } from "@/lib/quota";
+import { assertSetUp, SetupIncompleteError } from "@/lib/setup";
 import { evaluate } from "./conditions";
 import { editTarget, resolveParams, resolveString, setPath } from "./resolve";
 import { WorkflowSpec, type RunStatus, type Step } from "./spec";
@@ -152,18 +153,27 @@ export async function runWorkflow(
   // Validate on read in case the stored spec came from an older build.
   const spec = WorkflowSpec.parse(workflow.spec);
 
-  // Quota check lives here because every trigger type goes through runWorkflow.
-  const owner = workflow.agent.user;
-  if (!(await claimDailyRun(owner.id, owner.timeZone, dailyLimitFor(owner)))) {
-    throw new DailyLimitError();
-  }
-
   const trigger: TriggerPayload = {
     type: triggerType,
     lastRunAt: workflow.lastRunAt?.toISOString() ?? null,
     firedAt: new Date().toISOString(),
     body,
   };
+
+  // Setup and quota checks live here because every trigger type goes through runWorkflow.
+  // Setup can break after a skill is switched on (a connection removed, a key revoked).
+  const owner = workflow.agent.user;
+  try {
+    await assertSetUp(owner.id, spec, workflow.agent.vars);
+  } catch (error) {
+    if (error instanceof SetupIncompleteError && triggerType === "schedule") {
+      await switchOff(workflowId, trigger, error.message);
+    }
+    throw error;
+  }
+  if (!(await claimDailyRun(owner.id, owner.timeZone, dailyLimitFor(owner)))) {
+    throw new DailyLimitError();
+  }
 
   const [run] = await db
     .insert(runs)
@@ -183,6 +193,19 @@ export async function runWorkflow(
     startIndex: 0,
     seedSteps: {},
     dryRun: Boolean(options.dryRun),
+  });
+}
+
+// Rather than fail at every interval, a schedule that can't run is switched off, with one failed
+// run saying why. It doesn't count against the daily limit: nothing ran.
+async function switchOff(workflowId: string, trigger: TriggerPayload, reason: string): Promise<void> {
+  await db.update(workflows).set({ enabled: 0, nextRunAt: null }).where(eq(workflows.id, workflowId));
+  await db.insert(runs).values({
+    workflowId,
+    status: "failed",
+    trigger,
+    errorMessage: `${reason}.\n\nThe schedule was switched off. Switch it back on once that's done.`,
+    finishedAt: new Date(),
   });
 }
 

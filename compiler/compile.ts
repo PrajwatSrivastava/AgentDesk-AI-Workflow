@@ -19,6 +19,8 @@ export interface CompileRequest {
   agentName: string;
   agentRole: string;
   agentVars: Record<string, string>;
+  /** Details the user confirmed before compiling, one line each */
+  clarifications?: string[];
 }
 
 // ~1k tokens for an 8-step spec plus room for reasoning tokens.

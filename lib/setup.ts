@@ -7,15 +7,35 @@ import type { AppSetting } from "@/integrations/define";
 import { findAction, findApp } from "@/integrations/registry";
 import { isIntegrationValue, isUnsetValue, valueField } from "./agent-types";
 import { decryptSecret } from "./crypto";
-import type { SetupItem } from "./setup-rules";
+import { blockingItems, type SetupItem } from "./setup-rules";
 
 /** Always in the {{agent.*}} scope */
 const BUILT_IN_VALUES = new Set(["name", "role"]);
 
-/** App key to settings. Apps not in the map aren't connected. */
-export type ConnectionStates = ReadonlyMap<string, Record<string, string>>;
+export interface ConnectionState {
+  settings: Record<string, string>;
+  /** Set when the service refused the credential during a run (401/403), cleared when it is saved again */
+  lastError: string | null;
+}
+
+/** By app key. Apps not in the map aren't connected. */
+export type ConnectionStates = ReadonlyMap<string, ConnectionState>;
 
 export { blockingItems, type SetupItem, type SetupResult } from "./setup-rules";
+
+/** A run was started before its skill was set up. The message is safe to show. */
+export class SetupIncompleteError extends Error {
+  constructor(readonly items: SetupItem[]) {
+    super(`Finish setup first: ${items.map((item) => item.label).join(", ")}`);
+    this.name = "SetupIncompleteError";
+  }
+}
+
+/** Throws SetupIncompleteError if anything required is missing, read fresh from the database. */
+export async function assertSetUp(userId: string, spec: WorkflowSpec, agentVars: Record<string, string>): Promise<void> {
+  const missing = blockingItems(setupNeeds(spec, agentVars, await connectionStates(userId)));
+  if (missing.length > 0) throw new SetupIncompleteError(missing);
+}
 
 export function missingSettings(
   settings: AppSetting[] | undefined,
@@ -46,17 +66,21 @@ export function setupNeeds(
     const relied = Object.entries(definition.settingDefaults ?? {})
       .filter(([param]) => step.params[param] === undefined)
       .map(([, key]) => key);
-    const missing = missingSettings(app?.settings, saved)
+    const missing = missingSettings(app?.settings, saved?.settings)
       .filter((setting) => relied.includes(setting.key))
       .map((setting) => setting.label);
+    const rejected = saved?.lastError ?? undefined;
 
-    if (saved !== undefined && missing.length === 0) continue;
+    if (saved !== undefined && missing.length === 0 && !rejected) continue;
 
-    const optional = !definition.sideEffect;
+    // Reads that can't run without a key (Tavily) are required like sends
+    const neededForReads = !definition.sideEffect && definition.secretRequired;
+    const optional = !definition.sideEffect && !definition.secretRequired;
     const existing = connectionsNeeded.get(needs);
     if (existing) {
       // Required if any step sends through it
       if (!optional) existing.optional = false;
+      if (neededForReads) existing.neededForReads = true;
       existing.missing = [...new Set([...existing.missing, ...missing])];
       continue;
     }
@@ -68,6 +92,8 @@ export function setupNeeds(
       connected: saved !== undefined,
       missing,
       optional,
+      neededForReads,
+      rejected,
     });
   }
 
@@ -95,13 +121,13 @@ export function setupNeeds(
   ];
 }
 
-/** Settings only, no secrets. */
-export async function connectionStates(userId: string): Promise<Map<string, Record<string, string>>> {
+/** Settings and last error only, no secrets. */
+export async function connectionStates(userId: string): Promise<Map<string, ConnectionState>> {
   const rows = await db.query.connections.findMany({
     where: eq(connections.userId, userId),
-    columns: { app: true, settings: true },
+    columns: { app: true, settings: true, lastError: true },
   });
-  return new Map(rows.map((row) => [row.app, row.settings]));
+  return new Map(rows.map((row) => [row.app, { settings: row.settings, lastError: row.lastError }]));
 }
 
 export async function connectionSecret(userId: string, app: string): Promise<string | null> {

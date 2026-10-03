@@ -17,23 +17,36 @@ const CREATE_APP_URL = `https://api.slack.com/apps?new_app=1&manifest_json=${enc
   JSON.stringify(MANIFEST),
 )}`;
 
+// https://hooks.slack.com/services/<team>/<channel>/<token>. Anything shorter isn't a webhook,
+// and Slack answers it with a redirect to an ordinary web page.
+const WEBHOOK_URL = /^https:\/\/hooks\.slack\.com\/services\/[A-Z0-9]+\/[A-Z0-9]+\/[A-Za-z0-9]+$/;
+
 function assertWebhookUrl(secret: string): void {
-  if (!secret.startsWith("https://hooks.slack.com/")) {
+  if (!WEBHOOK_URL.test(secret)) {
     throw new IntegrationError(
       "That does not look like a Slack webhook URL",
       undefined,
-      "It should start with https://hooks.slack.com/services/",
+      "Copy the whole URL from Incoming Webhooks. It looks like https://hooks.slack.com/services/T…/B…/…",
     );
   }
 }
 
 async function send(webhook: string, text: string): Promise<void> {
-  await request(webhook, {
+  const response = await request(webhook, {
     method: "POST",
     body: { text },
     label: "Slack",
     hint: "Slack rejected the message. The webhook may have been revoked; recreate it in Connections.",
   });
+  // A webhook that took the message replies with exactly "ok"; anything else (a redirected web page) wasn't delivered
+  const reply = (await response.text().catch(() => "")).trim();
+  if (reply !== "ok") {
+    throw new IntegrationError(
+      "Slack didn't accept the message",
+      undefined,
+      "That URL isn't a working incoming webhook. Create one under Incoming Webhooks in your Slack app and paste it in Connections.",
+    );
+  }
 }
 
 // The webhook URL is the credential, stored encrypted like other secrets.

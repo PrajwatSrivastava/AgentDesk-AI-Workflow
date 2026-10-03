@@ -6,8 +6,9 @@ import type { ObjectRequest, ObjectResult } from "./types";
 // Fallback lists, since model availability changes by the hour. On 2026-10-01 several flash
 // models gave 503, Pro gave 429 and 2.5-flash gave 404. Override with GEMINI_*_MODELS.
 const DEFAULT_MODELS: Record<ModelTier, string[]> = {
-  // Thinking models
-  compiler: ["gemini-3.6-flash", "gemini-3.5-flash", "gemini-3-flash-preview"],
+  // Thinking models, then flash-lite as a last resort: the free tier allows only 20 flash requests
+  // a day per model, and flash-lite passed the compiler fixtures too (every spec is validated anyway).
+  compiler: ["gemini-3.6-flash", "gemini-3.5-flash", "gemini-3-flash-preview", "gemini-3.5-flash-lite", "gemini-3.1-flash-lite"],
   // No thinking, much cheaper
   summary: ["gemini-3.5-flash-lite", "gemini-3.1-flash-lite"],
 };
@@ -30,8 +31,20 @@ interface GeminiError {
     code?: number;
     message?: string;
     status?: string;
-    details?: { "@type"?: string; retryDelay?: string }[];
+    details?: { "@type"?: string; retryDelay?: string; violations?: { quotaId?: string }[] }[];
   };
+}
+
+// A daily quota (e.g. 20 requests a day per model on the free tier) also comes back as 429,
+// but waiting a minute won't help: it resets at midnight Pacific time.
+function isDailyQuota(error: GeminiError["error"]): boolean {
+  return Boolean(error?.details?.some((detail) => detail.violations?.some((v) => /PerDay/i.test(v.quotaId ?? ""))));
+}
+
+function formatWait(ms: number): string {
+  const minutes = Math.max(1, Math.round(ms / 60_000));
+  const hours = Math.floor(minutes / 60);
+  return hours > 0 ? `${hours} h ${minutes % 60} min` : `${minutes} min`;
 }
 
 interface GeminiResponse {
@@ -64,8 +77,12 @@ export async function generateObject(request: ObjectRequest): Promise<ObjectResu
   });
 
   const failures: string[] = [];
+  const models = modelsFor(request.tier);
+  /** Models out of daily quota, with the soonest reset */
+  const exhausted: string[] = [];
+  let resetMs = Infinity;
 
-  for (const model of modelsFor(request.tier)) {
+  for (const model of models) {
     for (let attempt = 1; attempt <= ATTEMPTS_PER_MODEL; attempt++) {
       let response: Response;
       try {
@@ -97,6 +114,13 @@ export async function generateObject(request: ObjectRequest): Promise<ObjectResu
         break;
       }
 
+      if (response.status === 429 && isDailyQuota(error)) {
+        exhausted.push(model);
+        resetMs = Math.min(resetMs, retryWait(response, error, attempt));
+        failures.push(`${model}: today's free requests are used up`);
+        break;
+      }
+
       if (RETRYABLE.has(response.status)) {
         const wait = retryWait(response, error, attempt);
         if (attempt < ATTEMPTS_PER_MODEL && wait <= MAX_WAIT_MS) {
@@ -118,8 +142,14 @@ export async function generateObject(request: ObjectRequest): Promise<ObjectResu
     }
   }
 
+  const setting = request.tier === "compiler" ? "GEMINI_COMPILER_MODELS" : "GEMINI_SUMMARY_MODELS";
+  if (exhausted.length === models.length) {
+    throw new Error(
+      `Gemini's daily limit is used up for every model this step uses (${exhausted.join(", ")}). It resets in about ${formatWait(resetMs)}.\n\nTo keep going sooner, turn on billing for this Gemini API key in Google AI Studio, or set ${setting} to models that still have quota.`,
+    );
+  }
   throw new Error(
-    `Every configured Gemini model is unavailable right now — ${failures.join("; ")}.\n\nThis is usually a short-lived demand spike. Try again in a minute, or set GEMINI_COMPILER_MODELS / GEMINI_SUMMARY_MODELS to models that are serving.`,
+    `Every configured Gemini model is unavailable right now — ${failures.join("; ")}.\n\nThis is usually a short-lived demand spike. Try again in a minute, or set ${setting} to models that are serving.`,
   );
 }
 

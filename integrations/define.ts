@@ -14,6 +14,8 @@ export interface Action {
   settingDefaults?: Record<string, string>;
   /** Externally visible effect, skipped on dry runs. */
   sideEffect: boolean;
+  /** Can't run at all without its connection, even as a read (unlike GitHub, which only gets higher limits). */
+  secretRequired: boolean;
   run(params: unknown, secret?: string): Promise<unknown>;
 }
 
@@ -26,6 +28,7 @@ interface ActionInput<S extends z.ZodObject<z.ZodRawShape>> {
   needs?: string;
   settingDefaults?: Record<string, string>;
   sideEffect?: boolean;
+  secretRequired?: boolean;
   run(params: z.infer<S>, secret?: string): Promise<unknown>;
 }
 
@@ -41,6 +44,7 @@ export function defineAction<S extends z.ZodObject<z.ZodRawShape>>(
     needs: input.needs,
     settingDefaults: input.settingDefaults,
     sideEffect: input.sideEffect ?? false,
+    secretRequired: input.secretRequired ?? false,
     // Validation lives here so no handler can forget it.
     run: (params, secret) => input.run(input.params.parse(params), secret),
   };

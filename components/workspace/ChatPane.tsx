@@ -1,31 +1,36 @@
 "use client";
 
 import { useEffect, useRef, useState } from "react";
+import type { ChatMessage } from "@/lib/chat-messages";
 import { cn } from "@/lib/cn";
-
-export interface ChatMessage {
-  role: "user" | "agent";
-  text: string;
-  /** Compiler complaints, shown when a request could not be built. */
-  problems?: string[];
-}
+import { ClarifyCard } from "./ClarifyCard";
 
 const SUGGESTIONS = [
   "Every hour, check Hacker News for mentions of Linear and send me anything important on Slack. Ask me before posting if it's urgent.",
   "Each morning, read https://vercel.com/atom and email me a summary at me@example.com.",
   "Twice a day, look at new open issues on vercel/next.js and post a digest to Slack.",
+  "Give me 5 fellowship deadlines related to AI safety.",
 ];
+
+const BUSY_LABEL = {
+  clarify: "Reading your request…",
+  compile: "Working out the steps…",
+};
 
 export function ChatPane({
   agentName,
   messages,
   busy,
   onSubmit,
+  onPick,
+  onBuild,
 }: {
   agentName: string;
   messages: ChatMessage[];
-  busy: boolean;
+  busy: keyof typeof BUSY_LABEL | null;
   onSubmit: (request: string) => void | Promise<void>;
+  onPick: (messageId: string, questionId: string, pick: number | string) => void;
+  onBuild: (messageId: string) => void | Promise<void>;
 }) {
   const [value, setValue] = useState("");
   const scroller = useRef<HTMLDivElement>(null);
@@ -67,20 +72,30 @@ export function ChatPane({
           </div>
         ) : (
           <ul className="space-y-4">
-            {messages.map((message, index) => (
+            {messages.map((message) => (
               <li
-                key={index}
+                key={message.id}
                 className={cn(message.role === "user" && "flex justify-end")}
               >
                 <div
                   className={cn(
-                    "max-w-[85%] text-sm leading-relaxed",
+                    "text-sm leading-relaxed",
+                    message.clarify ? "max-w-full" : "max-w-[85%]",
                     message.role === "user"
                       ? "bg-accent-soft text-ink rounded-2xl rounded-br-md px-3.5 py-2.5"
                       : "text-ink",
                   )}
                 >
-                  <p className="whitespace-pre-line">{message.text}</p>
+                  {message.text && <p className="whitespace-pre-line">{message.text}</p>}
+
+                  {message.clarify && (
+                    <ClarifyCard
+                      card={message.clarify}
+                      disabled={busy !== null}
+                      onPick={(questionId, pick) => onPick(message.id, questionId, pick)}
+                      onBuild={() => void onBuild(message.id)}
+                    />
+                  )}
 
                   {message.problems && message.problems.length > 0 && (
                     <ul className="text-muted mt-2 space-y-1 text-xs">
@@ -98,7 +113,7 @@ export function ChatPane({
             {busy && (
               <li className="text-muted flex items-center gap-2 text-sm">
                 <span className="bg-accent size-1.5 animate-pulse rounded-full" />
-                Working out the steps…
+                {BUSY_LABEL[busy]}
               </li>
             )}
           </ul>
@@ -116,7 +131,7 @@ export function ChatPane({
             }
           }}
           rows={3}
-          disabled={busy}
+          disabled={busy !== null}
           placeholder={`Ask ${agentName}…`}
           aria-label={`Describe a job for ${agentName}`}
           className="placeholder:text-muted/70 w-full resize-none rounded-lg border border-rule px-3 py-2.5 text-sm outline-none focus:border-accent disabled:opacity-60"
@@ -126,7 +141,7 @@ export function ChatPane({
           <button
             type="button"
             onClick={() => send(value)}
-            disabled={busy || value.trim().length === 0}
+            disabled={busy !== null || value.trim().length === 0}
             className="bg-ink hover:bg-ink/90 h-8 rounded-lg px-3.5 text-[13px] font-medium text-paper transition-colors disabled:bg-ink/30"
           >
             Send

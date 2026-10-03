@@ -36,7 +36,9 @@ Write \`{{step_id.field}}\` to use an earlier step's output. A reference may onl
 - \`{{agent.*}}\` — values configured on the agent.
 - the \`id\` of a step that appears **earlier** in the list. Never a later step, never itself.
 
-Every action in the catalog lists the shape it \`returns\`. Reference those exact field names and no others. List-shaped sources expose \`count\` and \`items\`, so a search step with id \`fetch\` gives you \`{{fetch.count}}\` and \`{{fetch.items}}\`. An object-shaped source such as \`weather.forecast\` has no \`count\` — reference its fields directly, e.g. \`{{weather.today.rainChance}}\`. Interpolating an object or list into an \`ai\` prompt renders it as readable JSON.
+Every action in the catalog lists the shape it \`returns\`. Reference those exact field names and no others. List-shaped sources expose \`count\` and \`items\`, so a search step with id \`fetch\` gives you \`{{fetch.count}}\` and \`{{fetch.items}}\`. An object-shaped source such as \`weather.forecast\` has no \`count\` — reference its fields directly, e.g. \`{{weather.today.rainChance}}\`. Interpolating an object or list into an \`ai\` prompt renders it as readable JSON. An \`ai\` step's output has exactly the fields of its \`outputSchema\`, so a step \`extract\` with \`{ "records": "{name,url}[]" }\` gives \`{{extract.records}}\` and nothing else.
+
+A parameter that takes a list (\`items\` on \`data.tidy_list\`) must be one whole reference such as \`"{{extract.records}}"\`, never text around a reference.
 
 # Conditions
 
@@ -59,11 +61,17 @@ Operators: \`eq\`, \`neq\`, \`gt\`, \`gte\`, \`lt\`, \`lte\`, \`contains\`, \`is
 3. Add a \`human\` step only when the user asks to be consulted — "ask me", "approve", "check with me", "confirm", "let me review".
 4. **If the user qualifies that request with a condition, you must put the condition in the step's \`when\` field.** Phrases like "ask me if it's urgent", "only check with me when it's negative", "confirm before sending high-severity ones" are all conditional. A \`human\` step with no \`when\` pauses *every single run* and waits for a person, which is wrong when the user asked to be interrupted only sometimes — it turns an automation into a queue of chores. The condition almost always tests a field produced by the preceding \`ai\` step, so give that step an \`outputSchema\` field to test.
 5. Pass \`{{trigger.lastRunAt}}\` as \`since\` wherever an action accepts it, so runs do not repeat material.
-6. An \`ai\` step's \`outputSchema\` is a flat map of field name to type. Types are \`string\`, \`number\`, \`boolean\`, \`string[]\`, or a pipe enum like \`low|medium|high\`. No nesting.
+6. An \`ai\` step's \`outputSchema\` is a flat map of field name to type. Types are \`string\`, \`number\`, \`boolean\`, \`string[]\`, a pipe enum like \`low|medium|high\`, or a list of records like \`{name,deadline,url}[]\` (string fields only, at most 8) for pulling many similar entries out of text. No other nesting.
 7. **Every \`ai\` step's prompt must interpolate the data it works on.** Writing "summarise these stories" is not enough — the model is a fresh request and sees only what the prompt contains, so the prompt must include \`{{fetch.items}}\` or whichever earlier output it is meant to read. A prompt without a \`{{reference}}\` produces a reply asking you to supply the data, which then gets delivered as though it were the result.
 8. \`name\` is a short human label for the workflow, in the user's own words where possible.
 9. Use the fewest steps that do the job. Eight is the hard maximum.
 10. **Leave out \`to\` on \`resend.send_email\` and \`pageId\` on \`notion.append_to_page\`** when the user says "email me" or "my Notion page". The user's own address and page are set once on their Connections page and are filled in automatically. Set them only when the user names a different recipient or page, and never as an \`{{agent.*}}\` value.
+11. **Confirmed details override anything you would infer.** When the message lists them: follow the delivery choice exactly, even when it says "(set up later)"; "Just show me in the app" means no sending step at all (the run page shows the last step's output); "Only when I run it" means a \`manual\` trigger; for approval, "No" means no \`human\` step, "always ask me first" means a \`human\` step without \`when\`, and "Only when something looks important" means a \`human\` step whose \`when\` tests a field such as \`important\` from the preceding \`ai\` step.
+12. **Web pages.** For one page at a known URL (an article, an announcement) use \`web.read_page\`. For a page that lists entries with their own links (blog posts, releases, news) use \`web.list_items\`. Prefer \`rss.fetch_feed\` when the site has a feed. When entries on a page have details to pull out (deadlines, eligibility, prices), read the page with \`web.read_page\` and extract records with an \`ai\` step. Leave \`selector\` out unless the user gives one.
+13. **Web search.** When the job needs current information from the web and no URL is given, start with \`tavily.search\`. Set \`includePageText\` to true when the answer needs details from inside the pages (dates, eligibility), with \`limit\` 5 or less. Phrase \`query\` like a search engine query. For news, set \`topic\` to \`news\` and \`timeRange\` to match how often it runs: \`day\` for daily or more often, otherwise \`week\`.
+14. **Lists for people.** Never put \`.items\` or \`.records\` into a message. Pass the list through \`data.tidy_list\` (drop incomplete entries, keep upcoming dates, remove duplicates, sort, limit) and deliver \`{{tidy.text}}\`. Give \`format\` a single-brace template naming the record fields, e.g. \`"• {name}, deadline {deadline}: {url}"\`. For news, sort newest first: \`dateField\` and \`sortBy\` set to the date field, \`order\` \`desc\`.
+15. After \`data.tidy_list\`, filter on \`{{tidy.count}}\` instead of on the raw source, so nothing is sent when no entry survives cleaning.
+16. **Several topics.** "News on X and Y" means news on each topic, not only stories where they meet. Give each topic its own search (at most 3), then one \`ai\` step that reads all the results and keeps items about any of the topics, labelled with the topic. Combine topics into one query only when the user asks about the overlap ("how X affects Y") or the confirmed details say so. An extraction prompt keeps everything that matches what the user asked for; it must not add conditions of its own, or the list comes back empty.
 
 # Worked examples
 
@@ -152,6 +160,64 @@ Operators: \`eq\`, \`neq\`, \`gt\`, \`gte\`, \`lt\`, \`lte\`, \`contains\`, \`is
 }
 \`\`\`
 
+## "Every Monday, find 5 open AI safety fellowships with upcoming deadlines and post them to Slack."
+
+\`\`\`json
+{
+  "version": 1,
+  "name": "AI safety fellowship deadlines",
+  "trigger": { "type": "schedule", "everyMinutes": 10080 },
+  "steps": [
+    {
+      "id": "search",
+      "type": "action",
+      "app": "tavily",
+      "action": "search",
+      "params": { "query": "AI safety fellowship applications open deadline", "limit": 5, "includePageText": true }
+    },
+    {
+      "id": "gate",
+      "type": "filter",
+      "condition": { "left": "{{search.count}}", "op": "gt", "right": 0 }
+    },
+    {
+      "id": "extract",
+      "type": "ai",
+      "prompt": "List every AI safety fellowship mentioned in these pages, with its organisation, application deadline and link. Skip anything that is not a fellowship.\\n\\n{{search.items}}",
+      "outputSchema": { "records": "{name,organisation,deadline,url}[]" }
+    },
+    {
+      "id": "tidy",
+      "type": "action",
+      "app": "data",
+      "action": "tidy_list",
+      "params": {
+        "items": "{{extract.records}}",
+        "requireFields": "name,url",
+        "dedupeBy": "name",
+        "dateField": "deadline",
+        "keep": "upcoming",
+        "sortBy": "deadline",
+        "limit": 5,
+        "format": "• {name} ({organisation}), deadline {deadline}: {url}"
+      }
+    },
+    {
+      "id": "found",
+      "type": "filter",
+      "condition": { "left": "{{tidy.count}}", "op": "gt", "right": 0 }
+    },
+    {
+      "id": "post",
+      "type": "action",
+      "app": "slack",
+      "action": "post_message",
+      "params": { "text": "*Open AI safety fellowships*\\n\\n{{tidy.text}}" }
+    }
+  ]
+}
+\`\`\`
+
 If the request genuinely cannot be built from the actions above, still return a valid specification for the closest achievable job rather than inventing capability.`;
 }
 
@@ -161,7 +227,12 @@ export function compilerUserMessage(params: {
   agentName: string;
   agentRole: string;
   agentVars: Record<string, string>;
+  /** Answers the user confirmed before compiling, one line each */
+  clarifications?: string[];
 }): string {
+  const confirmed = params.clarifications?.length
+    ? `\n\nConfirmed details (these override anything you would infer):\n${params.clarifications.map((line) => `- ${line}`).join("\n")}`
+    : "";
   const vars = Object.entries(params.agentVars);
   // Shown as "" the model treats an unset var as unusable and hard-codes a guess.
   const varLines = vars.length
@@ -180,5 +251,5 @@ Available agent values:
 ${varLines}
 
 Job to build:
-${params.request}`;
+${params.request}${confirmed}`;
 }

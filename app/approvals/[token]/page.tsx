@@ -10,6 +10,9 @@ import { db } from "@/db";
 import { approvals } from "@/db/schema";
 import { formatClockTime } from "@/lib/format";
 
+// Approving resumes the run inside the page's server action
+export const maxDuration = 300;
+
 // No session needed: the token (32 random bytes) is the credential.
 export default async function ApprovalPage({
   params,

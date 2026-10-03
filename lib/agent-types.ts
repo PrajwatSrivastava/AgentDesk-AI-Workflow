@@ -374,8 +374,8 @@ export const AGENT_TYPES: readonly AgentType[] = [
     role: "Track a topic across news outlets and research papers and report what is new",
     persona: "Neutral and factual. Names the outlet or paper behind every claim.",
     avatarColor: "#db2777",
-    suggests: ["rss", "slack"],
-    vars: { newsTopic: "", researchTopic: "" },
+    suggests: ["rss", "tavily", "slack"],
+    vars: { newsTopic: "", researchTopic: "", deadlineTopic: "" },
     presets: [
       {
         name: "News monitor",
@@ -460,6 +460,67 @@ export const AGENT_TYPES: readonly AgentType[] = [
           ],
         },
       },
+      {
+        // Search, extract records, then plain code cleans and formats the list
+        name: "Upcoming deadlines",
+        spec: {
+          version: 1,
+          name: "Upcoming deadlines",
+          trigger: { type: "schedule", everyMinutes: 10080 },
+          steps: [
+            {
+              id: "search",
+              type: "action",
+              app: "tavily",
+              action: "search",
+              params: {
+                query: "{{agent.deadlineTopic}} application deadline",
+                limit: 5,
+                includePageText: true,
+              },
+            },
+            {
+              id: "gate",
+              type: "filter",
+              condition: { left: "{{search.count}}", op: "gt", right: 0 },
+            },
+            {
+              id: "extract",
+              type: "ai",
+              prompt:
+                "From these search results, list every {{agent.deadlineTopic}} opportunity (fellowship, grant, programme or call for applications) that states an application deadline.\n\nrecords: one per opportunity. name: its name. organisation: who runs it. deadline: the application deadline as written, with the year if given. url: the page it came from, copied exactly. Leave a field empty if the page doesn't say.\n\n{{search.items}}",
+              outputSchema: { records: "{name,organisation,deadline,url}[]" },
+            },
+            {
+              id: "tidy",
+              type: "action",
+              app: "data",
+              action: "tidy_list",
+              params: {
+                items: "{{extract.records}}",
+                requireFields: "name,url",
+                dateField: "deadline",
+                keep: "upcoming",
+                sortBy: "deadline",
+                limit: 5,
+                format: "• {name} ({organisation}), deadline {deadline}: {url}",
+              },
+            },
+            {
+              id: "found",
+              type: "filter",
+              condition: { left: "{{tidy.count}}", op: "gt", right: 0 },
+            },
+            {
+              id: "post",
+              type: "action",
+              app: "slack",
+              action: "post_message",
+              params: { text: "*Upcoming deadlines: {{agent.deadlineTopic}}*\n\n{{tidy.text}}" },
+            },
+          ],
+        },
+      },
     ],
   },
 ];
@@ -490,6 +551,11 @@ const VALUE_FIELDS: Record<string, ValueField> = {
     label: "Research topic",
     hint: "Searched as an exact phrase across new arXiv papers.",
     placeholder: "e.g. AI agents",
+  },
+  deadlineTopic: {
+    label: "Deadlines to track",
+    hint: "The kind of opportunity to search the web for each week.",
+    placeholder: "e.g. AI safety fellowships",
   },
   watchTerm: { label: "Product or company to watch", placeholder: "e.g. Drizzle ORM" },
   topic: { label: "Topic", placeholder: "e.g. developer tools" },

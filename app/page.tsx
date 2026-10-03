@@ -9,7 +9,7 @@ import { AGENT_TYPES, findAgentType } from "@/lib/agent-types";
 import { findApp } from "@/integrations/registry";
 import { AccountMenu } from "@/components/AccountMenu";
 import { getCurrentUser, type CurrentUser } from "@/lib/session";
-import { connectionStates } from "@/lib/setup";
+import { connectionStates, type ConnectionState } from "@/lib/setup";
 import { redirect } from "next/navigation";
 
 // Without this the build prerenders the page with no DB and bakes in the setup notice.
@@ -70,7 +70,7 @@ export default async function LandingPage() {
 
   const [result, states] = await Promise.all([
     loadAgents(user),
-    connectionStates(user.id).catch(() => new Map<string, Record<string, string>>()),
+    connectionStates(user.id).catch(() => new Map<string, ConnectionState>()),
   ]);
 
   if ("error" in result) {

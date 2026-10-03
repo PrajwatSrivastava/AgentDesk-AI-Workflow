@@ -25,11 +25,11 @@ export async function ConnectionsPrompt({
       status:
         saved === undefined
           ? "not connected"
-          : missingSettings(app.settings, saved).length > 0
+          : missingSettings(app.settings, saved.settings).length > 0 || saved.lastError
             ? "needs details"
             : "ready",
-      // Read-only apps (GitHub here) are optional
-      optional: app.actions.every((action) => !action.sideEffect),
+      // Read-only apps (GitHub here) are optional, unless their reads need the key (Tavily)
+      optional: app.actions.every((action) => !action.sideEffect && !action.secretRequired),
     };
   });
 

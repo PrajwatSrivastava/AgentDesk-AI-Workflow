@@ -12,6 +12,10 @@ import { requireUser } from "@/lib/session";
 import { connectionStates, setupNeeds } from "@/lib/setup";
 import { toSpecView } from "@/lib/spec-view";
 
+// Applies to this page's server actions too. A run that searches, reads pages and calls the
+// model several times can take a minute or more. 300 s is the Vercel Hobby limit with Fluid compute.
+export const maxDuration = 300;
+
 export default async function AgentPage({
   params,
   searchParams,

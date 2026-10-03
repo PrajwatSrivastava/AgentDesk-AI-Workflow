@@ -6,6 +6,7 @@ import { runs, workflows } from "@/db/schema";
 import { isUuid } from "@/lib/access";
 import { fail, handle, ok } from "@/lib/api";
 import { DailyLimitError } from "@/lib/quota";
+import { SetupIncompleteError } from "@/lib/setup";
 
 // Schedules can't loop (next_run_at advances when claimed), but a webhook workflow
 // that posts somewhere which calls back here can. This caps it.
@@ -13,6 +14,9 @@ const MAX_RUNS_PER_HOUR = 60;
 
 // Body is stored with the run and may end up in a prompt
 const MAX_BODY_BYTES = 256 * 1024;
+
+// The run executes inside the request
+export const maxDuration = 300;
 
 export async function POST(
   request: Request,
@@ -60,6 +64,9 @@ export async function POST(
       return ok({ runId: run.id, status: run.status }, 202);
     } catch (error) {
       if (error instanceof DailyLimitError) return fail(error.message, 429);
+      if (error instanceof SetupIncompleteError) {
+        return fail(error.message, 409, "Open this skill in Agent Desk to see what's missing.");
+      }
       throw error;
     }
   });

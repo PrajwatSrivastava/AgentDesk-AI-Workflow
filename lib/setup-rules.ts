@@ -11,6 +11,10 @@ export type SetupItem =
       missing: string[];
       /** Recommended only, the step runs without it */
       optional: boolean;
+      /** A read can't run without it (web search), as opposed to a send */
+      neededForReads?: boolean;
+      /** Why the service refused the saved credential on the last run, until it is saved again */
+      rejected?: string;
     }
   | {
       kind: "value";
@@ -26,8 +30,8 @@ export function isOptional(item: SetupItem): boolean {
   return item.kind === "connection" && item.optional;
 }
 
-// Test runs suppress sends, so only missing values block them (reads need values too).
-export function blockingItems(items: SetupItem[], dryRun: boolean): SetupItem[] {
-  const required = items.filter((item) => !isOptional(item));
-  return dryRun ? required.filter((item) => item.kind === "value") : required;
+// The same for every kind of run. A test run sends nothing, but it should still prove the
+// skill is set up, or a skill that passes its test can fail the first real run.
+export function blockingItems(items: SetupItem[]): SetupItem[] {
+  return items.filter((item) => !isOptional(item));
 }

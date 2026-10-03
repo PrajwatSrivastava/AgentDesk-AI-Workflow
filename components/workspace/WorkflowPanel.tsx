@@ -29,7 +29,7 @@ export function WorkflowPanel({
   staggered = false,
   busy,
   setup,
-  blocked = { test: false, run: false },
+  blocked = false,
   allowance,
   notice,
   actions,
@@ -42,8 +42,8 @@ export function WorkflowPanel({
   busy?: string | null;
   /** Setup checklist, rendered under the header. */
   setup?: ReactNode;
-  /** Run types disabled until setup is done. */
-  blocked?: { test: boolean; run: boolean };
+  /** Setup isn't finished, so no kind of run can start. */
+  blocked?: boolean;
   /** Today's runs, counted across all the user's agents. */
   allowance?: RunAllowance;
   /** Why the last press didn't start a run (e.g. daily limit). */
@@ -75,7 +75,7 @@ export function WorkflowPanel({
                 enabled={enabled}
                 busy={busy === "enable"}
                 // can still be turned off with setup incomplete
-                locked={!enabled && blocked.run}
+                locked={!enabled && blocked}
                 onChange={actions.onToggleEnabled}
               />
             )}
@@ -141,11 +141,10 @@ export function WorkflowPanel({
           </p>
         )}
 
-        {!isDraft && blocked.run && (
+        {!isDraft && blocked && (
           <p className="text-muted mb-3 text-xs leading-relaxed">
-            {blocked.test
-              ? "Finish the setup above to test or run this skill."
-              : "Finish the setup above to run this for real. Test run works now: it fetches real data and sends nothing."}
+            Finish the setup above to test or run this skill.
+            {enabled && " It's switched on, but it won't run until then."}
           </p>
         )}
 
@@ -180,7 +179,7 @@ export function WorkflowPanel({
               {actions?.onTestRun && (
                 <Button
                   onClick={actions.onTestRun}
-                  disabled={Boolean(busy) || blocked.test || outOfRuns}
+                  disabled={Boolean(busy) || blocked || outOfRuns}
                 >
                   {busy === "test" ? "Testing…" : "Test run"}
                 </Button>
@@ -189,7 +188,7 @@ export function WorkflowPanel({
                 <Button
                   variant="ghost"
                   onClick={actions.onRunNow}
-                  disabled={Boolean(busy) || blocked.run || outOfRuns}
+                  disabled={Boolean(busy) || blocked || outOfRuns}
                 >
                   {busy === "run" ? "Running…" : "Run now"}
                 </Button>

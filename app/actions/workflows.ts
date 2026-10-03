@@ -2,6 +2,7 @@
 
 import { eq } from "drizzle-orm";
 import { revalidatePath } from "next/cache";
+import { clarify, formatClarifications } from "@/compiler/clarify";
 import { compile } from "@/compiler/compile";
 import { validateSpec } from "@/compiler/validate";
 import { runWorkflow } from "@/core/executor";
@@ -9,10 +10,11 @@ import { WorkflowSpec } from "@/core/spec";
 import { db } from "@/db";
 import { workflows } from "@/db/schema";
 import { findOwnedAgent, findOwnedWorkflow } from "@/lib/access";
+import type { ClarifyAnswer, ClarifyCard } from "@/lib/clarify-types";
 import { DailyLimitError } from "@/lib/quota";
 import { nextRunFrom } from "@/lib/schedule";
 import { requireUser } from "@/lib/session";
-import { blockingItems, connectionStates, setupNeeds } from "@/lib/setup";
+import { assertSetUp, connectionStates, SetupIncompleteError } from "@/lib/setup";
 import { toSpecView, type SpecView } from "@/lib/spec-view";
 
 export interface CompileOutcome {
@@ -27,26 +29,58 @@ export interface CompileOutcome {
 // Caps the cost of a single compile
 const MAX_REQUEST_LENGTH = 2000;
 
-export async function compileRequest(
+function requestProblem(request: unknown): string | null {
+  if (typeof request !== "string" || !request.trim()) return "Describe the job first.";
+  if (request.length > MAX_REQUEST_LENGTH) return `Keep the description under ${MAX_REQUEST_LENGTH} characters.`;
+  return null;
+}
+
+/** First step for every request: the details to confirm before anything is built. */
+export async function clarifyRequest(
   agentId: string,
   request: string,
-): Promise<CompileOutcome> {
+): Promise<{ ok: true; card: ClarifyCard } | { ok: false; message: string }> {
   const user = await requireUser();
-  if (typeof request !== "string" || !request.trim()) {
-    return { ok: false, message: "Describe the job first." };
-  }
-  if (request.length > MAX_REQUEST_LENGTH) {
-    return { ok: false, message: `Keep the description under ${MAX_REQUEST_LENGTH} characters.` };
-  }
-  const agent = await findOwnedAgent(user.id, agentId);
+  const problem = requestProblem(request);
+  if (problem) return { ok: false, message: problem };
+  const [agent, states] = await Promise.all([findOwnedAgent(user.id, agentId), connectionStates(user.id)]);
   if (!agent) return { ok: false, message: "That agent no longer exists." };
 
-  const result = await compile({
+  const card = await clarify({
     request,
     agentName: agent.name,
     agentRole: agent.role,
     agentVars: agent.vars,
+    connected: [...states.keys()],
   });
+  return { ok: true, card };
+}
+
+export async function compileRequest(
+  agentId: string,
+  request: string,
+  answers: ClarifyAnswer[] = [],
+): Promise<CompileOutcome> {
+  const user = await requireUser();
+  const problem = requestProblem(request);
+  if (problem) return { ok: false, message: problem };
+  const agent = await findOwnedAgent(user.id, agentId);
+  if (!agent) return { ok: false, message: "That agent no longer exists." };
+
+  let result: Awaited<ReturnType<typeof compile>>;
+  try {
+    result = await compile({
+      request,
+      agentName: agent.name,
+      agentRole: agent.role,
+      agentVars: agent.vars,
+      clarifications: formatClarifications(answers),
+    });
+  } catch (error) {
+    // Returned, not thrown: Next hides thrown messages in production, and this one (e.g. Gemini's
+    // daily limit) is the only explanation the user gets.
+    return { ok: false, message: error instanceof Error ? error.message : String(error) };
+  }
 
   if (!result.ok) {
     return { ok: false, message: result.message, problems: result.problems };
@@ -81,48 +115,31 @@ export async function saveWorkflow(
   return { ok: true, id: created.id };
 }
 
-// null if the workflow isn't the user's. Connection states load in the same round trip.
-async function ownWorkflow(workflowId: string) {
-  const user = await requireUser();
-  const [workflow, states] = await Promise.all([
-    findOwnedWorkflow(user.id, workflowId),
-    connectionStates(user.id),
-  ]);
-  if (!workflow) return null;
-  return { user, workflow, states, spec: WorkflowSpec.parse(workflow.spec) };
-}
-
-type OwnedWorkflow = NonNullable<Awaited<ReturnType<typeof ownWorkflow>>>;
-
-// Server-side version of the check that disables the UI buttons. Otherwise a run could fail
-// at its last step (missing Slack webhook, etc.) after already paying for the AI calls.
-function setupProblem(owned: OwnedWorkflow, dryRun: boolean): string | null {
-  const missing = blockingItems(
-    setupNeeds(owned.spec, owned.workflow.agent.vars, owned.states),
-    dryRun,
-  );
-  return missing.length > 0
-    ? `Finish setup first: ${missing.map((item) => item.label).join(", ")}`
-    : null;
-}
-
 export async function setEnabled(workflowId: string, enabled: boolean): Promise<ActionResult> {
-  const owned = await ownWorkflow(workflowId);
-  if (!owned) return { ok: false, error: "That skill no longer exists." };
+  const user = await requireUser();
+  const workflow = await findOwnedWorkflow(user.id, workflowId);
+  if (!workflow) return { ok: false, error: "That skill no longer exists." };
+  const spec = WorkflowSpec.parse(workflow.spec);
+
   // Disabling is always allowed, even if a connection was removed since.
-  const problem = enabled ? setupProblem(owned, false) : null;
-  if (problem) return { ok: false, error: problem };
+  if (enabled) {
+    try {
+      await assertSetUp(user.id, spec, workflow.agent.vars);
+    } catch (error) {
+      if (error instanceof SetupIncompleteError) return { ok: false, error: error.message };
+      throw error;
+    }
+  }
 
   // Make it due now so the first run doesn't wait a full interval.
-  const nextRunAt =
-    enabled && owned.spec.trigger.type === "schedule" ? nextRunFrom(new Date(), 0) : null;
+  const nextRunAt = enabled && spec.trigger.type === "schedule" ? nextRunFrom(new Date(), 0) : null;
 
   await db
     .update(workflows)
     .set({ enabled: enabled ? 1 : 0, nextRunAt })
-    .where(eq(workflows.id, owned.workflow.id));
+    .where(eq(workflows.id, workflow.id));
 
-  revalidatePath(`/agents/${owned.workflow.agentId}`);
+  revalidatePath(`/agents/${workflow.agentId}`);
   return { ok: true };
 }
 
@@ -138,22 +155,24 @@ export async function deleteWorkflow(workflowId: string): Promise<void> {
 
 export type RunNowResult = { ok: true; runId: string; status: string } | { ok: false; error: string };
 
+// runWorkflow checks setup and the daily limit before any step runs (and before any AI call is paid for).
 export async function runNow(
   workflowId: string,
   options: { dryRun?: boolean } = {},
 ): Promise<RunNowResult> {
-  const owned = await ownWorkflow(workflowId);
-  if (!owned) return { ok: false, error: "That skill no longer exists." };
-  const problem = setupProblem(owned, Boolean(options.dryRun));
-  if (problem) return { ok: false, error: problem };
+  const user = await requireUser();
+  const workflow = await findOwnedWorkflow(user.id, workflowId);
+  if (!workflow) return { ok: false, error: "That skill no longer exists." };
 
   try {
-    const run = await runWorkflow(owned.workflow.id, "manual", { dryRun: options.dryRun });
+    const run = await runWorkflow(workflow.id, "manual", { dryRun: options.dryRun });
     revalidatePath(`/runs/${run.id}`);
     return { ok: true, runId: run.id, status: run.status };
   } catch (error) {
     // Return it: Next hides thrown error messages in production.
-    if (error instanceof DailyLimitError) return { ok: false, error: error.message };
+    if (error instanceof DailyLimitError || error instanceof SetupIncompleteError) {
+      return { ok: false, error: error.message };
+    }
     throw error;
   }
 }

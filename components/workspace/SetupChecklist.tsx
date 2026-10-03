@@ -79,12 +79,16 @@ function ConnectionRow({
   const details = item.missing.map((label) => label.toLowerCase()).join(" and ");
   const title = !item.connected
     ? `Connect ${item.label}`
-    : `Finish setting up ${item.label}`;
+    : item.rejected
+      ? `Fix ${item.label}`
+      : `Finish setting up ${item.label}`;
   const explanation = item.optional
     ? "Works without it, at lower limits. Set up once on the Connections page."
     : !item.connected
       ? `Add it on the Connections page${details ? `, with the ${details}` : ""}. Every agent then uses it.`
-      : `Set the ${details} on the Connections page. Every agent then uses it.`;
+      : item.rejected
+        ? `The last run was refused: ${item.rejected.replace(/[.\s]+$/, "")}. Fix it on the Connections page; saving there checks it again.`
+        : `Set the ${details} on the Connections page. Every agent then uses it.`;
 
   return (
     <li className="bg-surface flex flex-wrap items-center justify-between gap-3 rounded-lg border border-rule px-3.5 py-3">
@@ -92,7 +96,7 @@ function ConnectionRow({
         <p className="text-[13px] font-medium">
           {title}
           <span className="text-muted ml-1.5 text-[11px] font-normal">
-            {item.optional ? "optional" : "needed to send"}
+            {item.optional ? "optional" : item.neededForReads ? "needed to search" : "needed to send"}
           </span>
         </p>
         <p className="text-muted mt-0.5 text-xs">{explanation}</p>

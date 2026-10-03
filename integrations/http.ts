@@ -101,6 +101,11 @@ export function describeError(error: unknown): string {
 }
 
 export async function request(url: string, options: RequestOptions): Promise<Response> {
+  return (await requestWithUrl(url, options)).response;
+}
+
+// Same as request(), plus the URL actually reached after redirects.
+async function requestWithUrl(url: string, options: RequestOptions): Promise<{ response: Response; url: string }> {
   const { method = "GET", headers = {}, body, timeoutMs = DEFAULT_TIMEOUT_MS, label, hint, publicOnly } = options;
   const signal = AbortSignal.timeout(timeoutMs);
   const init = {
@@ -115,8 +120,13 @@ export async function request(url: string, options: RequestOptions): Promise<Res
   };
 
   let response: Response;
+  let finalUrl = url;
   try {
-    response = publicOnly ? await fetchPublic(url, init, label) : await fetch(url, init);
+    if (publicOnly) {
+      ({ response, url: finalUrl } = await fetchPublic(url, init, label));
+    } else {
+      response = await fetch(url, init);
+    }
   } catch (error) {
     if (error instanceof IntegrationError) throw error;
     if (error instanceof Error && error.name === "TimeoutError") {
@@ -141,11 +151,11 @@ export async function request(url: string, options: RequestOptions): Promise<Res
     );
   }
 
-  return response;
+  return { response, url: finalUrl };
 }
 
 // Manual redirects so every hop gets the public-only check.
-async function fetchPublic(url: string, init: RequestInit, label: string): Promise<Response> {
+async function fetchPublic(url: string, init: RequestInit, label: string): Promise<{ response: Response; url: string }> {
   let target = new URL(url);
   for (let hop = 0; hop <= MAX_REDIRECTS; hop++) {
     assertPublicUrl(target, label);
@@ -156,7 +166,7 @@ async function fetchPublic(url: string, init: RequestInit, label: string): Promi
     })) as unknown as Response;
 
     const location = response.headers.get("location");
-    if (response.status < 300 || response.status >= 400 || !location) return response;
+    if (response.status < 300 || response.status >= 400 || !location) return { response, url: target.href };
     await response.body?.cancel();
     target = new URL(location, target);
   }
@@ -165,6 +175,10 @@ async function fetchPublic(url: string, init: RequestInit, label: string): Promi
 
 // Size-limited read. Maps a mid-body timeout to IntegrationError instead of a bare DOMException.
 async function readBody(response: Response, label: string): Promise<string> {
+  return (await readBytes(response, label)).toString("utf8");
+}
+
+async function readBytes(response: Response, label: string): Promise<Buffer> {
   if (Number(response.headers.get("content-length") ?? 0) > MAX_BODY_BYTES) {
     throw new IntegrationError(`${label} sent more than ${MAX_BODY_BYTES / 1024 / 1024} MB`);
   }
@@ -188,7 +202,131 @@ async function readBody(response: Response, label: string): Promise<string> {
     }
     throw error;
   }
-  return Buffer.concat(chunks).toString("utf8");
+  return Buffer.concat(chunks);
+}
+
+export interface Page {
+  body: string;
+  /** After redirects; relative links resolve against this. */
+  finalUrl: string;
+  contentType: string;
+}
+
+/**
+ * Fetches a web page from a workflow-supplied URL: public internet only, robots.txt respected,
+ * HTML or plain text only, decoded with the page's own charset.
+ */
+export async function getPage(url: string, options: { label: string; hint?: string; timeoutMs?: number }): Promise<Page> {
+  const parsed = new URL(url);
+  if (!(await robotsAllow(parsed))) {
+    throw new IntegrationError(
+      `${parsed.hostname} asks automated tools not to read this page (robots.txt)`,
+      undefined,
+      "Use another page, or that site's RSS feed if it has one.",
+    );
+  }
+
+  const { response, url: finalUrl } = await requestWithUrl(url, {
+    ...options,
+    publicOnly: true,
+    headers: { accept: "text/html,application/xhtml+xml,text/plain;q=0.9,*/*;q=0.5" },
+  });
+  const contentType = (response.headers.get("content-type") ?? "").toLowerCase();
+  if (contentType && !/text\/html|application\/xhtml\+xml|text\/plain/.test(contentType)) {
+    await response.body?.cancel();
+    throw new IntegrationError(
+      `${options.label}: that address is not a web page (${contentType.split(";")[0]})`,
+      undefined,
+      "Point it at an HTML page. PDFs and downloads can't be read.",
+    );
+  }
+  const bytes = await readBytes(response, options.label);
+  return { body: decode(bytes, contentType), finalUrl, contentType };
+}
+
+// Header charset first, then <meta charset>, then UTF-8.
+function decode(bytes: Buffer, contentType: string): string {
+  const fromHeader = /charset=["']?([\w-]+)/.exec(contentType)?.[1];
+  const head = bytes.subarray(0, 2048).toString("latin1");
+  const fromMeta = /<meta[^>]+charset=["']?([\w-]+)/i.exec(head)?.[1];
+  for (const label of [fromHeader, fromMeta, "utf-8"]) {
+    if (!label) continue;
+    try {
+      return new TextDecoder(label).decode(bytes);
+    } catch {
+      // unknown label, try the next one
+    }
+  }
+  return bytes.toString("utf8");
+}
+
+const ROBOTS_TTL_MS = 60 * 60 * 1000;
+const robotsCache = new Map<string, { at: number; rules: RobotsRule[] }>();
+
+interface RobotsRule {
+  allow: boolean;
+  pattern: string;
+}
+
+// Missing or unreadable robots.txt means allowed, as crawlers treat it.
+async function robotsAllow(url: URL): Promise<boolean> {
+  let entry = robotsCache.get(url.origin);
+  if (!entry || Date.now() - entry.at > ROBOTS_TTL_MS) {
+    let rules: RobotsRule[] = [];
+    try {
+      const text = await getText(`${url.origin}/robots.txt`, { label: "robots.txt", publicOnly: true, timeoutMs: 3000 });
+      rules = parseRobots(text.slice(0, 64 * 1024));
+    } catch {
+      rules = [];
+    }
+    entry = { at: Date.now(), rules };
+    robotsCache.set(url.origin, entry);
+  }
+  const path = `${url.pathname}${url.search}`;
+  let best: RobotsRule | null = null;
+  for (const rule of entry.rules) {
+    if (!robotsMatch(rule.pattern, path)) continue;
+    // Longest match wins; on a tie, Allow wins
+    if (!best || rule.pattern.length > best.pattern.length || (rule.pattern.length === best.pattern.length && rule.allow)) {
+      best = rule;
+    }
+  }
+  return best?.allow ?? true;
+}
+
+// Rules for our own user agent if the file names it, otherwise the `*` group.
+export function parseRobots(text: string): RobotsRule[] {
+  const groups: { agents: string[]; rules: RobotsRule[] }[] = [];
+  let current: { agents: string[]; rules: RobotsRule[] } | null = null;
+  for (const raw of text.split(/\r?\n/)) {
+    const line = raw.replace(/#.*/, "").trim();
+    const match = /^([a-z-]+)\s*:\s*(.*)$/i.exec(line);
+    if (!match) continue;
+    const field = match[1].toLowerCase();
+    const value = match[2].trim();
+    if (field === "user-agent") {
+      if (!current || current.rules.length > 0) {
+        current = { agents: [], rules: [] };
+        groups.push(current);
+      }
+      current.agents.push(value.toLowerCase());
+    } else if ((field === "allow" || field === "disallow") && current) {
+      // "Disallow:" with no path allows everything
+      if (value) current.rules.push({ allow: field === "allow", pattern: value });
+    }
+  }
+  const ours = groups.filter((group) => group.agents.some((agent) => agent.startsWith("agentdesk")));
+  const chosen = ours.length > 0 ? ours : groups.filter((group) => group.agents.includes("*"));
+  return chosen.flatMap((group) => group.rules);
+}
+
+function robotsMatch(pattern: string, path: string): boolean {
+  const anchored = pattern.endsWith("$");
+  const body = (anchored ? pattern.slice(0, -1) : pattern)
+    .split("*")
+    .map((part) => part.replace(/[.+?^${}()|[\]\\]/g, "\\$&"))
+    .join(".*");
+  return new RegExp(`^${body}${anchored ? "$" : ""}`).test(path);
 }
 
 export async function getJson<T>(url: string, options: Omit<RequestOptions, "method" | "body">): Promise<T> {

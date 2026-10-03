@@ -7,17 +7,23 @@ import { findAction } from "@/integrations/registry";
 export function validateSpec(spec: WorkflowSpec): string[] {
   const problems: string[] = [];
   const available = new Set<string>(["trigger", "agent"]);
+  // An ai step's output has exactly the fields its outputSchema names
+  const aiFields = new Map<string, string[]>();
 
   for (const [index, step] of spec.steps.entries()) {
     const at = `step ${index + 1} ("${step.id}")`;
 
     for (const reference of referencesIn(stepReferenceSources(step))) {
-      const root = reference.split(/[.[]/)[0];
+      const [root, field] = reference.split(/[.[]/);
       if (!available.has(root)) {
         problems.push(
           available.size <= 2
             ? `${at} references {{${reference}}}, but no earlier step produces "${root}"`
             : `${at} references {{${reference}}}, but "${root}" is not the trigger, the agent, or an earlier step (available: ${[...available].join(", ")})`,
+        );
+      } else if (aiFields.has(root) && field && !aiFields.get(root)!.includes(field)) {
+        problems.push(
+          `${at} references {{${reference}}}, but step "${root}" only outputs: ${aiFields.get(root)!.join(", ")}`,
         );
       }
     }
@@ -28,8 +34,13 @@ export function validateSpec(spec: WorkflowSpec): string[] {
         problems.push(`${at} calls ${step.app}.${step.action}, which does not exist`);
       } else {
         problems.push(...checkParams(at, step.params, definition.params.shape));
+        if (typeof step.params.format === "string" && step.params.format.includes("{{")) {
+          problems.push(`${at} uses {{...}} in "format"; format fields take single braces, e.g. "{name}: {url}"`);
+        }
       }
     }
+
+    if (step.type === "ai") aiFields.set(step.id, Object.keys(step.outputSchema));
 
     // With no reference the model gets no data, replies "please provide the stories...", and that gets posted.
     if (step.type === "ai" && referencesIn(step.prompt).length === 0) {
@@ -62,6 +73,8 @@ function stepReferenceSources(step: WorkflowSpec["steps"][number]): unknown {
   }
 }
 
+const WHOLE_REFERENCE = /^\s*\{\{\s*[a-zA-Z0-9_.[\]]+\s*\}\}\s*$/;
+
 // Names only, not types: a number param can hold "{{fetch.count}}" until it's resolved at run time.
 function checkParams(
   at: string,
@@ -76,6 +89,9 @@ function checkParams(
       problems.push(
         `${at} passes unknown parameter "${name}" (accepts: ${known.join(", ") || "none"})`,
       );
+    } else if (shape[name] instanceof z.ZodArray && !WHOLE_REFERENCE.test(String(params[name]))) {
+      // A list param is filled by one whole reference, which resolves to the actual list at run time
+      problems.push(`${at} must pass "${name}" as one whole reference to a list, e.g. "{{extract.records}}"`);
     }
   }
 

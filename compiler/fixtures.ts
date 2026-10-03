@@ -1,14 +1,34 @@
-import type { StepType, WorkflowSpec } from "@/core/spec";
+import { recordListFields, type StepType, type WorkflowSpec } from "@/core/spec";
+import { findAction } from "@/integrations/registry";
+
+// Answers as the clarify card sends them, after formatClarifications
+const SEND_TO = {
+  slack: "Where should the results go? Slack",
+  app: "Where should the results go? Just show me in the app",
+};
+const NO_APPROVAL = "Should it ask you before sending? No, send it automatically";
+const SENDS = ["slack.post_message", "resend.send_email", "notion.append_to_page"];
+const WEB = ["tavily.search", "web.read_page", "web.list_items"];
 
 // Structural checks only (actions, cadence, filters, approvals). Exact matching would break on wording changes.
 export interface Fixture {
   name: string;
   request: string;
+  /** Confirmed details, as the clarify card would send them */
+  clarifications?: string[];
   expect: {
     triggerType?: WorkflowSpec["trigger"]["type"];
     everyMinutes?: number;
     /** app.action pairs that must appear in the spec. */
     usesActions?: string[];
+    /** app.action pairs that must not appear */
+    lacksActions?: string[];
+    /** Minimum number of steps calling an app.action, e.g. one search per topic */
+    actionAtLeast?: Record<string, number>;
+    /** Some ai step extracts a list of records ({a,b}[]) */
+    aiListField?: boolean;
+    /** Sending steps post a tidy_list's text, never raw items */
+    deliversListText?: boolean;
     hasStepTypes?: StepType[];
     lacksStepTypes?: StepType[];
     /** Checked both ways: a missing `when` pauses every run, an extra one stops asking. */
@@ -27,6 +47,8 @@ export const FIXTURES: Fixture[] = [
       triggerType: "schedule",
       everyMinutes: 60,
       usesActions: ["hackernews.search_stories", "slack.post_message"],
+      // A named source shouldn't turn into a web search
+      lacksActions: WEB,
       hasStepTypes: ["filter", "ai", "human"],
       humanHasWhen: true,
     },
@@ -93,6 +115,7 @@ export const FIXTURES: Fixture[] = [
       triggerType: "schedule",
       everyMinutes: 1440,
       usesActions: ["rss.fetch_feed", "notion.append_to_page"],
+      lacksActions: WEB,
       hasStepTypes: ["ai"],
       lacksStepTypes: ["human"],
     },
@@ -127,6 +150,8 @@ export const FIXTURES: Fixture[] = [
       triggerType: "schedule",
       everyMinutes: 15,
       usesActions: ["rss.fetch_feed", "slack.post_message"],
+      // A feed URL should be read as a feed, not scraped
+      lacksActions: WEB,
       hasStepTypes: ["filter"],
     },
   },
@@ -204,6 +229,79 @@ export const FIXTURES: Fixture[] = [
       hasStepTypes: ["ai", "human"],
     },
   },
+  {
+    // The example from the clarify card: no source named, so it has to search
+    name: "fellowship deadlines via web search",
+    request: "Give me 5 fellowship deadlines related to AI safety.",
+    clarifications: [
+      "Which fellowships should be included? Only ones still accepting applications",
+      SEND_TO.slack,
+      "How often should it run? Every week",
+      NO_APPROVAL,
+    ],
+    expect: {
+      triggerType: "schedule",
+      everyMinutes: 10080,
+      usesActions: ["tavily.search", "data.tidy_list", "slack.post_message"],
+      aiListField: true,
+      deliversListText: true,
+      lacksStepTypes: ["human"],
+    },
+  },
+  {
+    // Was compiled as one topic ("AI failures leading to climate disasters"), which found nothing
+    name: "two news topics, searched separately",
+    request: "AI security news on AI failures and climate disasters",
+    clarifications: [
+      "Which news do you want? News on each topic",
+      "Where should the results go? Notion",
+      "How often should it run? Only when I run it",
+      NO_APPROVAL,
+    ],
+    // A link list (records + tidy_list) and a written digest are both fine; one search per topic is the point
+    expect: {
+      triggerType: "manual",
+      usesActions: ["tavily.search", "notion.append_to_page"],
+      actionAtLeast: { "tavily.search": 2 },
+      hasStepTypes: ["ai"],
+    },
+  },
+  {
+    name: "listing page via list_items",
+    request:
+      "Check https://jobs.example.org/remote for new job posts that mention Rust and send me the list.",
+    clarifications: [SEND_TO.slack, "How often should it run? Every day", NO_APPROVAL],
+    expect: {
+      triggerType: "schedule",
+      everyMinutes: 1440,
+      usesActions: ["web.list_items", "slack.post_message"],
+      lacksActions: ["tavily.search"],
+    },
+  },
+  {
+    name: "one article via read_page, run by hand",
+    request: "Summarise https://paulgraham.com/greatwork.html in five bullet points.",
+    clarifications: [SEND_TO.app, "How often should it run? Only when I run it", NO_APPROVAL],
+    expect: {
+      triggerType: "manual",
+      usesActions: ["web.read_page"],
+      lacksActions: [...SENDS, "tavily.search"],
+      hasStepTypes: ["ai"],
+    },
+  },
+  {
+    // "Just show me in the app" means the run page is the destination
+    name: "show me in the app, no send step",
+    request: "Read the Vercel changelog at https://vercel.com/atom and summarise what changed.",
+    clarifications: [SEND_TO.app, "How often should it run? Every day", NO_APPROVAL],
+    expect: {
+      triggerType: "schedule",
+      everyMinutes: 1440,
+      usesActions: ["rss.fetch_feed"],
+      lacksActions: SENDS,
+      hasStepTypes: ["ai"],
+    },
+  },
 ];
 
 /** Empty array means the fixture passed. */
@@ -230,6 +328,40 @@ export function checkFixture(fixture: Fixture, spec: WorkflowSpec): string[] {
   for (const required of expect.usesActions ?? []) {
     if (!usedActions.has(required)) {
       failures.push(`missing action ${required} (got: ${[...usedActions].join(", ") || "none"})`);
+    }
+  }
+  for (const forbidden of expect.lacksActions ?? []) {
+    if (usedActions.has(forbidden)) failures.push(`should not use ${forbidden}`);
+  }
+  for (const [action, minimum] of Object.entries(expect.actionAtLeast ?? {})) {
+    const times = spec.steps.filter(
+      (step) => (step.type === "action" || step.type === "notify") && `${step.app}.${step.action}` === action,
+    ).length;
+    if (times < minimum) failures.push(`${action} is used ${times} time(s), expected at least ${minimum}`);
+  }
+
+  if (expect.aiListField) {
+    const extracts = spec.steps.some(
+      (step) => step.type === "ai" && Object.values(step.outputSchema).some((type) => recordListFields(type)),
+    );
+    if (!extracts) failures.push("no ai step extracts a list of records ({a,b}[])");
+  }
+
+  if (expect.deliversListText) {
+    const tidyIds = spec.steps
+      .filter((step) => step.type === "action" && step.app === "data" && step.action === "tidy_list")
+      .map((step) => step.id);
+    const sendParams = spec.steps.flatMap((step) =>
+      (step.type === "action" || step.type === "notify") && findAction(step.app, step.action)?.sideEffect
+        ? Object.values(step.params).filter((value): value is string => typeof value === "string")
+        : [],
+    );
+    const postsText = sendParams.some((value) =>
+      tidyIds.some((id) => new RegExp(`\\{\\{\\s*${id}\\.text\\s*\\}\\}`).test(value)),
+    );
+    if (!postsText) failures.push("the sending step doesn't post a tidy_list's text");
+    if (sendParams.some((value) => /\.items\s*\}\}/.test(value))) {
+      failures.push("the sending step posts raw .items");
     }
   }
 

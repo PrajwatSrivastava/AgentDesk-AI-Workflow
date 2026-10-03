@@ -43,7 +43,11 @@ interface Outcome {
 
 async function runOne(fixture: (typeof FIXTURES)[number]): Promise<Outcome> {
   try {
-    const result = await compile({ request: fixture.request, ...AGENT });
+    const result = await compile({
+      request: fixture.request,
+      clarifications: fixture.clarifications,
+      ...AGENT,
+    });
     const shared = {
       name: fixture.name,
       costMicros: result.usage.costMicros,

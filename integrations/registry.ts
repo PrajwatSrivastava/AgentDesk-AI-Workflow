@@ -1,6 +1,7 @@
 import { z } from "zod";
 import type { Action, App } from "./define";
 import { bluesky } from "./bluesky";
+import { data } from "./data";
 import { devto } from "./devto";
 import { github } from "./github";
 import { hackernews } from "./hackernews";
@@ -9,10 +10,12 @@ import { notion } from "./notion";
 import { resend } from "./resend";
 import { rss } from "./rss";
 import { slack } from "./slack";
+import { tavily } from "./tavily";
 import { weather } from "./weather";
+import { web } from "./web";
 
 // Keep this order fixed: the catalog is the cached prompt prefix and caching is a byte-prefix match.
-// Sources first, then destinations.
+// Sources first, then processing, then destinations.
 export const APPS: readonly App[] = [
   hackernews,
   lobsters,
@@ -21,6 +24,9 @@ export const APPS: readonly App[] = [
   rss,
   github,
   weather,
+  tavily,
+  web,
+  data,
   slack,
   resend,
   notion,
@@ -63,6 +69,16 @@ function describeType(property: JsonSchemaProperty): string {
   if (property.format === "email") return "string (email)";
   if (property.format === "uri" || property.format === "url") return "string (url)";
   return type ?? "string";
+}
+
+/** One line per action, for prompts that only need to know what's possible (the clarifier). */
+export function capabilitiesForPrompt(): string {
+  return APPS.flatMap((app) =>
+    app.actions.map((action) => {
+      const key = app.auth === "token" ? " [needs a connection]" : "";
+      return `- ${app.key}.${action.action}${key}: ${action.description.split(". ")[0].replace(/\.$/, "")}.`;
+    }),
+  ).join("\n");
 }
 
 /** Action catalog for the compiler prompt, built from the same Zod schemas used at run time. */

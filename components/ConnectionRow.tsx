@@ -58,7 +58,9 @@ export function ConnectionRow({
   const [notice, setNotice] = useState<string | null>(null);
 
   const connected = connection.masked !== null;
-  const ready = connected && connection.settings.every((setting) => setting.display !== null);
+  // A credential the service refused on a run isn't ready until it's saved again
+  const ready =
+    connected && !connection.lastError && connection.settings.every((setting) => setting.display !== null);
 
   const row = useRef<HTMLDivElement>(null);
   useEffect(() => {
@@ -113,8 +115,8 @@ export function ConnectionRow({
             Connected
           </span>
         ) : (
-          <span className="text-muted shrink-0 text-xs">
-            {connected ? "Needs details" : "Not connected"}
+          <span className={cn("shrink-0 text-xs", connection.lastError ? "text-failed" : "text-muted")}>
+            {connection.lastError ? "Needs fixing" : connected ? "Needs details" : "Not connected"}
           </span>
         )}
       </div>
@@ -149,6 +151,8 @@ export function ConnectionRow({
       {connection.lastError && (
         <p className="bg-failed-soft text-failed mt-3 rounded-md px-3 py-2 text-xs leading-relaxed">
           Last attempt failed: {connection.lastError}
+          <br />
+          Skills that use {connection.label} won&apos;t run until you fix this and save again below.
         </p>
       )}
 

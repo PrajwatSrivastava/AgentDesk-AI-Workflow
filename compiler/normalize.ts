@@ -4,6 +4,7 @@ import { findAction } from "@/integrations/registry";
 import { isIntegrationValue } from "@/lib/agent-types";
 
 const AGENT_REFERENCE = /^\s*\{\{\s*agent\.([a-zA-Z0-9_]+)\s*\}\}\s*$/;
+const MAX_RESULTS_WITH_TEXT = 5;
 
 export interface Normalized {
   spec: WorkflowSpec;
@@ -33,6 +34,17 @@ export function normalizeSpec(spec: WorkflowSpec): Normalized {
             `step "${current.id}" took ${param} from {{agent.${key}}}; it now uses the one set on the Connections page`,
           );
         }
+      }
+      // Page text is up to 4000 characters per result, so more than 5 bloats the next ai step (rule 13)
+      if (
+        current.app === "tavily" &&
+        current.action === "search" &&
+        params.includePageText === true &&
+        typeof params.limit === "number" &&
+        params.limit > MAX_RESULTS_WITH_TEXT
+      ) {
+        fixes.push(`step "${current.id}" asked for ${params.limit} results with page text; reduced to ${MAX_RESULTS_WITH_TEXT}`);
+        params.limit = MAX_RESULTS_WITH_TEXT;
       }
       current = { ...current, params };
     }

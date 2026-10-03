@@ -5,6 +5,7 @@ import { useRouter } from "next/navigation";
 import { deleteAgent as deleteAgentAction } from "@/app/actions/agents";
 import { getLatestRun, pollAgent, refreshAgent, tickFromDashboard } from "@/app/actions/runs";
 import {
+  clarifyRequest,
   compileRequest,
   deleteWorkflow as deleteWorkflowAction,
   runNow as runNowAction,
@@ -13,6 +14,8 @@ import {
 } from "@/app/actions/workflows";
 import type { WorkflowSpec } from "@/core/spec";
 import { announceActivity } from "@/lib/activity";
+import { newMessageId, sanitizeMessages, supersedeOpen, type ChatMessage } from "@/lib/chat-messages";
+import { answersFor, type ClarifyCard } from "@/lib/clarify-types";
 import { cn } from "@/lib/cn";
 import { readLocal, removeLocal, workspaceKey, writeLocal } from "@/lib/local-state";
 import type { RunAllowance } from "@/lib/quota";
@@ -20,7 +23,7 @@ import type { RunSummary, RunView } from "@/lib/run-views";
 import { blockingItems, type SetupItem } from "@/lib/setup-rules";
 import type { SpecView } from "@/lib/spec-view";
 import { AgentSettings, type AgentValue } from "./AgentSettings";
-import { ChatPane, type ChatMessage } from "./ChatPane";
+import { ChatPane } from "./ChatPane";
 import { RecentRuns } from "./RecentRuns";
 import { SetupChecklist } from "./SetupChecklist";
 import { WorkflowPanel } from "./WorkflowPanel";
@@ -93,7 +96,7 @@ export function Workspace({
   useEffect(() => {
     const saved = readLocal<SavedWorkspace>(storageKey);
     if (saved && Array.isArray(saved.messages)) {
-      setMessages(saved.messages);
+      setMessages(sanitizeMessages(saved.messages));
       if (saved.draft?.spec && saved.draft.view) {
         setDraft(saved.draft);
         setSelected(null);
@@ -192,30 +195,77 @@ export function Workspace({
     return () => clearInterval(timer);
   }, [agentId, selected, router]);
 
+  // Every request is confirmed first: the agent replies with questions, and nothing is
+  // built until the user presses "Build it".
   async function submit(request: string) {
-    setMessages((prior) => [...prior, { role: "user", text: request }]);
-    setBusy("compile");
+    setMessages((prior) => [
+      ...supersedeOpen(prior),
+      { id: newMessageId(), role: "user", text: request },
+    ]);
+    setBusy("clarify");
     setStaggered(false);
 
     try {
-      const { ok, spec, view, message, problems } = await compileRequest(agentId, request);
+      const result = await clarifyRequest(agentId, request);
+      setMessages((prior) => [
+        ...prior,
+        result.ok
+          ? { id: newMessageId(), role: "agent", text: "", clarify: result.card }
+          : agentSays(result.message),
+      ]);
+    } catch {
+      setMessages((prior) => [...prior, agentSays(UNREACHABLE)]);
+    } finally {
+      setBusy(null);
+    }
+  }
+
+  function updateCard(messageId: string, change: (card: ClarifyCard) => ClarifyCard) {
+    setMessages((prior) =>
+      prior.map((message) =>
+        message.id === messageId && message.clarify
+          ? { ...message, clarify: change(message.clarify) }
+          : message,
+      ),
+    );
+  }
+
+  function pick(messageId: string, questionId: string, value: number | string) {
+    updateCard(messageId, (card) =>
+      card.status === "open" ? { ...card, picks: { ...card.picks, [questionId]: value } } : card,
+    );
+  }
+
+  async function build(messageId: string) {
+    const card = messages.find((message) => message.id === messageId)?.clarify;
+    if (!card || card.status !== "open" || busy) return;
+    updateCard(messageId, (open) => ({ ...open, status: "answered" }));
+    setBusy("compile");
+
+    // Opened again on failure so the answers can be changed and built again
+    const reopen = () => updateCard(messageId, (answered) => ({ ...answered, status: "open" }));
+    try {
+      const { ok, spec, view, message, problems } = await compileRequest(
+        agentId,
+        card.request,
+        answersFor(card),
+      );
 
       if (!ok || !spec || !view) {
-        setMessages((prior) => [
-          ...prior,
-          { role: "agent", text: message ?? "I couldn't build that.", problems },
-        ]);
+        reopen();
+        setMessages((prior) => [...prior, agentSays(message ?? "I couldn't build that.", problems)]);
         return;
       }
 
       setDraft({ spec, view });
       setSelected(null);
       setStaggered(true);
-      setMessages((prior) => [...prior, { role: "agent", text: summarise(spec, view) }]);
+      setMessages((prior) => [...prior, agentSays(summarise(spec, view))]);
     } catch (error) {
+      reopen();
       setMessages((prior) => [
         ...prior,
-        { role: "agent", text: error instanceof Error ? error.message : String(error) },
+        agentSays(error instanceof Error ? error.message : String(error)),
       ]);
     } finally {
       setBusy(null);
@@ -230,18 +280,15 @@ export function Workspace({
     try {
       const result = await saveWorkflow(agentId, draft.spec);
       if (!result.ok) {
-        setMessages((prior) => [...prior, { role: "agent", text: result.error }]);
+        setMessages((prior) => [...prior, agentSays(result.error)]);
         return;
       }
       setDraft(null);
       setSelected(result.id);
       setStaggered(false);
-      setMessages((prior) => [
-        ...prior,
-        { role: "agent", text: "Saved. Test it, then switch it on." },
-      ]);
+      setMessages((prior) => [...prior, agentSays("Saved. Test it, then switch it on.")]);
     } catch {
-      setMessages((prior) => [...prior, { role: "agent", text: UNREACHABLE }]);
+      setMessages((prior) => [...prior, agentSays(UNREACHABLE)]);
     } finally {
       setBusy(null);
     }
@@ -307,8 +354,10 @@ export function Workspace({
         <ChatPane
           agentName={agentName}
           messages={messages}
-          busy={busy === "compile"}
+          busy={busy === "clarify" || busy === "compile" ? busy : null}
           onSubmit={submit}
+          onPick={pick}
+          onBuild={build}
         />
 
         <section className="flex min-h-0 flex-col gap-3 lg:overflow-hidden">
@@ -388,7 +437,8 @@ export function Workspace({
               allowance={allowance}
               notice={notice}
               setup={<SetupChecklist key={current.id} agentId={agentId} items={current.setup} />}
-              blocked={blockedBy(current.setup)}
+              // Same rule the server applies before any run starts
+              blocked={blockingItems(current.setup).length > 0}
               actions={{
                 onTestRun: () => trigger("test"),
                 onRunNow: () => trigger("run"),
@@ -446,12 +496,8 @@ function SkillChip({
   );
 }
 
-/** Same check the server runs before starting a run. */
-function blockedBy(setup: SetupItem[]): { test: boolean; run: boolean } {
-  return {
-    test: blockingItems(setup, true).length > 0,
-    run: blockingItems(setup, false).length > 0,
-  };
+function agentSays(text: string, problems?: string[]): ChatMessage {
+  return { id: newMessageId(), role: "agent", text, problems };
 }
 
 // Built from the spec, no second model call needed.

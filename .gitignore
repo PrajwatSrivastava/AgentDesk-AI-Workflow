@@ -24,6 +24,9 @@
 .DS_Store
 *.pem
 
+# demo video renders
+*.mp4
+
 # debug
 npm-debug.log*
 yarn-debug.log*

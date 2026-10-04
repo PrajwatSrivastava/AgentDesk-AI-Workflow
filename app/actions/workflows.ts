@@ -77,8 +77,8 @@ export async function compileRequest(
       clarifications: formatClarifications(answers),
     });
   } catch (error) {
-    // Returned, not thrown: Next hides thrown messages in production, and this one (e.g. Gemini's
-    // daily limit) is the only explanation the user gets.
+    // Returned, not thrown: Next hides thrown messages in production, and this one (e.g. an LLM
+    // account out of credit) is the only explanation the user gets.
     return { ok: false, message: error instanceof Error ? error.message : String(error) };
   }
 

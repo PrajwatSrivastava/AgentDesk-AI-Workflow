@@ -3,7 +3,7 @@ import { capabilitiesForPrompt } from "@/integrations/registry";
 import type { ClarifyAnswer, ClarifyCard, ClarifyQuestion } from "@/lib/clarify-types";
 import { generateObject } from "@/lib/llm";
 
-// Flat on purpose: it is also the JSON schema Gemini decodes against.
+// Flat on purpose: it is also the JSON schema the model decodes against.
 const Reply = z.object({
   understood: z.string().describe("one sentence restating the job in plain words"),
   delivery: z.enum(["slack", "email", "notion", "app", "unsure"]),
@@ -160,6 +160,13 @@ ${input.request}`,
 }
 
 const oneLine = (value: string, max: number) => value.replace(/[\r\n\t]+/g, " ").replace(/\s+/g, " ").trim().slice(0, max);
+
+/** The approval option picked on the card, or undefined when it wasn't asked or was typed in. */
+export function confirmedApproval(clarifications: string[] = []): Reply["approval"] | undefined {
+  const prefix = `${FIXED_QUESTIONS.approval} `;
+  const answer = clarifications.find((line) => line.startsWith(prefix))?.slice(prefix.length);
+  return (Object.keys(APPROVAL) as Reply["approval"][]).find((key) => APPROVAL[key] === answer);
+}
 
 /** Confirmed answers as lines for the compiler, from untrusted client input. */
 export function formatClarifications(answers: unknown): string[] {

@@ -3,7 +3,7 @@
 ![License: MIT](https://img.shields.io/badge/license-MIT-blue.svg)
 ![Next.js 16](https://img.shields.io/badge/Next.js-16-black)
 ![TypeScript](https://img.shields.io/badge/TypeScript-strict-3178c6)
-![Gemini](https://img.shields.io/badge/LLM-Gemini-8e75b2)
+![Nebius Token Factory](https://img.shields.io/badge/LLM-Nebius%20Token%20Factory-8e75b2)
 [![Live demo](https://img.shields.io/badge/demo-live-brightgreen)](https://agent-desk-ai-workflow.vercel.app/)
 
 **Live app: [agent-desk-ai-workflow.vercel.app](https://agent-desk-ai-workflow.vercel.app/)**
@@ -24,8 +24,9 @@ saving, run it as a test (nothing is sent), then switch it on.
 
 ## Features
 
-- **Plain English in, readable workflow out.** Gemini compiles the request into
-  a JSON spec that is checked against the integration catalog before you see it.
+- **Plain English in, readable workflow out.** An open model on Nebius Token
+  Factory compiles the request into a JSON spec that is checked against the
+  integration catalog before you see it.
 - **It asks before it builds.** A vague request like "give me 5 fellowship
   deadlines related to AI safety" gets a short card of questions first: which
   ones, where to send them, how often, whether to ask before sending. Best
@@ -66,7 +67,7 @@ New accounts start with six agents, each with ready-made workflows:
 ```mermaid
 flowchart LR
     A["Describe<br/>a job"] --> Q["Confirm<br/>details"]
-    Q --> B["Gemini<br/>compiles it"]
+    Q --> B["LLM<br/>compiles it"]
     B --> C{"Valid?"}
     C -- "no: repair" --> B
     C -- yes --> D["Preview"]
@@ -80,7 +81,7 @@ replays it on every run, so fetched content can change what a summary says but
 can't add a step or change where results are sent. That keeps prompt injection
 contained to the text of a summary.
 
-The confirmation step is a fast flash-lite call. It restates the job in one
+The confirmation step is a fast call to a small model. It restates the job in one
 line, asks up to three questions about what to fetch or keep, and adds three
 fixed ones (destination, schedule, approval). The answers go to the compiler as
 "confirmed details", which override anything it would otherwise guess. If the
@@ -93,7 +94,7 @@ flowchart LR
     U["Browser"] -->|"pages and<br/>server actions"| N["Next.js app"]
     N --> DB[("Neon Postgres<br/>via Drizzle")]
     N --> C["compiler/"]
-    C --> G["Gemini API"]
+    C --> G["Nebius Token Factory"]
     N --> E["core/executor"]
     E --> G
     E --> I["integrations/"]
@@ -125,8 +126,8 @@ compiler/
   prompt.ts       system prompt, built from the registry
   compile.ts      call, normalise, validate, retry, give up
   validate.ts     checks the JSON schema can't express
-  fixtures.ts     21 example requests with expected structure
-lib/              sessions, quota, encryption, Gemini client, setup rules
+  fixtures.ts     23 example requests with expected structure
+lib/              sessions, quota, encryption, LLM clients, setup rules
 app/              pages, server actions and API routes
 components/       UI
 ```
@@ -138,13 +139,27 @@ two can't drift. Adding an integration means one new file and one line in
 
 ### LLM
 
-Everything runs on Gemini (`lib/llm/gemini.ts`), with `responseJsonSchema` for
-constrained output. The compiler uses thinking flash models and AI steps use
-flash-lite. Each tier tries models from an ordered list: retry on 503/429, skip
-on 404, fail on 400. The free tier allows only 20 requests a day per flash
-model, so the compiler falls back to flash-lite once they're used up, and a
-daily-limit error says when it resets. Override the lists with
-`GEMINI_COMPILER_MODELS` and `GEMINI_SUMMARY_MODELS`.
+Everything runs on open models served by [Nebius Token Factory](https://tokenfactory.nebius.com)
+(`lib/llm/nebius.ts`), an OpenAI-compatible API, with `response_format:
+json_schema` for constrained output. Every call goes through one function,
+`generateObject`, which returns JSON checked against a Zod schema.
+
+The compiler uses DeepSeek V4 Pro (about 5 s and $0.015 a compile), then
+DeepSeek V4 Flash and Qwen3-235B as fallbacks; put Flash first to build for
+about $0.001 at 10-30 s. AI steps and the confirmation card use Qwen3-235B
+Instruct, then Qwen3-30B. Only models tagged `structured_outputs` in the Nebius
+catalog are used.
+
+Each tier tries models from an ordered list: retry on 429 and 5xx, skip a model
+that's missing or times out, and stop at once on a refused key or an empty
+balance (Nebius returns 402), with a message saying what to do. Override the
+lists with `NEBIUS_COMPILER_MODELS` and `NEBIUS_SUMMARY_MODELS`.
+
+Nebius decodes JSON in schema order and doesn't show the schema to the model,
+so the compiler's schema is also sent in its prompt, and schema fields are
+declared in the same order as the prompt's worked examples. The approval
+answer confirmed on the card is checked against the spec, because a missing
+`when` would turn "ask me if it's urgent" into a pause on every run.
 
 Every reply is still validated with Zod and against the registry, with one
 repair attempt for mistakes like an unknown action or a reference to a step
@@ -173,7 +188,10 @@ five seconds. In production, point an external cron at `/api/tick` with
 ## Getting started
 
 Requires Node 20.9+, a Postgres database ([Neon](https://neon.tech) has a free
-tier) and a [Gemini API key](https://aistudio.google.com/apikey).
+tier) and a [Nebius Token Factory](https://tokenfactory.nebius.com) API key.
+Sign-up needs a bank card and includes $1 of trial credit; building a workflow
+costs about $0.015, and an AI step during a run $0.0003 to $0.003 depending on
+how much text it reads.
 
 ```bash
 git clone https://github.com/PrajwatSrivastava/Agent-Desk---AI-Workflow.git
@@ -192,8 +210,8 @@ before it's saved.
 | Variable | Required | Notes |
 |---|---|---|
 | `DATABASE_URL` | yes | Postgres connection string |
-| `GEMINI_API_KEY` | yes | free tier available |
-| `GEMINI_COMPILER_MODELS`, `GEMINI_SUMMARY_MODELS` | no | comma-separated model fallback lists |
+| `NEBIUS_API_KEY` | yes | from tokenfactory.nebius.com |
+| `NEBIUS_COMPILER_MODELS`, `NEBIUS_SUMMARY_MODELS` | no | comma-separated model fallback lists |
 | `ENCRYPTION_KEY` | yes | 64 hex chars from `npm run keygen` |
 | `RESEND_FROM` | for email | sender address on a domain verified in Resend |
 | `APP_URL` | no | base URL for approval links; defaults to `VERCEL_URL`, then localhost |
@@ -206,7 +224,7 @@ before it's saved.
 ```bash
 npm run dev         # start the app on http://localhost:3000
 npm run db:push     # create or update the database tables
-npm run fixtures    # compile 21 sample requests on Gemini, report pass rate and cost
+npm run fixtures    # compile 23 sample requests, report pass rate and cost
 npm run check-web   # offline tests for the page extractor and list cleaner
 npm run typecheck
 npm run lint

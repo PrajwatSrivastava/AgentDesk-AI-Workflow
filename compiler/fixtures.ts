@@ -7,6 +7,7 @@ const SEND_TO = {
   app: "Where should the results go? Just show me in the app",
 };
 const NO_APPROVAL = "Should it ask you before sending? No, send it automatically";
+const ASK_WHEN_IMPORTANT = "Should it ask you before sending? Only when something looks important";
 const SENDS = ["slack.post_message", "resend.send_email", "notion.append_to_page"];
 const WEB = ["tavily.search", "web.read_page", "web.list_items"];
 
@@ -50,6 +51,20 @@ export const FIXTURES: Fixture[] = [
       // A named source shouldn't turn into a web search
       lacksActions: WEB,
       hasStepTypes: ["filter", "ai", "human"],
+      humanHasWhen: true,
+    },
+  },
+  {
+    // The same request as it arrives from the app, after the clarify card
+    name: "conditional approval confirmed on the card",
+    request:
+      "Every hour, check Hacker News for mentions of Linear and send me anything important on Slack. Ask me before posting if it's urgent.",
+    clarifications: [SEND_TO.slack, "How often should it run? Every hour", ASK_WHEN_IMPORTANT],
+    expect: {
+      triggerType: "schedule",
+      everyMinutes: 60,
+      usesActions: ["hackernews.search_stories", "slack.post_message"],
+      hasStepTypes: ["ai", "human"],
       humanHasWhen: true,
     },
   },

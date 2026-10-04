@@ -29,20 +29,20 @@ export const env = {
     );
   },
 
-  get geminiApiKey(): string {
+  get nebiusApiKey(): string {
     return required(
-      "GEMINI_API_KEY",
-      "Create a key at aistudio.google.com/apikey and add it to .env.local.",
+      "NEBIUS_API_KEY",
+      "Create a key at tokenfactory.nebius.com (API keys) and add it to .env.local.",
     );
   },
 
-  /** Comma-separated fallback order, overrides the defaults in lib/llm/gemini.ts. */
-  get geminiCompilerModels(): string[] | undefined {
-    return list(process.env.GEMINI_COMPILER_MODELS);
+  /** Comma-separated fallback order, overrides the defaults in lib/llm/nebius.ts. */
+  get nebiusCompilerModels(): string[] | undefined {
+    return list(process.env.NEBIUS_COMPILER_MODELS);
   },
 
-  get geminiSummaryModels(): string[] | undefined {
-    return list(process.env.GEMINI_SUMMARY_MODELS);
+  get nebiusSummaryModels(): string[] | undefined {
+    return list(process.env.NEBIUS_SUMMARY_MODELS);
   },
 
   /** 32 bytes, hex */

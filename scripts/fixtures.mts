@@ -74,7 +74,7 @@ async function runOne(fixture: (typeof FIXTURES)[number]): Promise<Outcome> {
   }
 }
 
-// Kept low for the Gemini free tier's requests-per-minute cap.
+// Kept low for per-minute rate limits (Nebius starts at 60 requests a minute).
 const CONCURRENCY = 2;
 
 const outcomes: Outcome[] = new Array(FIXTURES.length);
@@ -116,7 +116,7 @@ console.log(`needed a repair attempt: ${repaired}/${FIXTURES.length}`);
 console.log(
   `cost: ${formatMicros(totalCost)} total, ${formatMicros(Math.round(totalCost / FIXTURES.length))} per compile`,
 );
-// Gemini caches implicitly and best-effort, so zero here isn't necessarily a fault.
+// Providers cache implicitly and best-effort, so zero here isn't necessarily a fault.
 console.log(`cached prompt tokens read: ${totalCacheReads.toLocaleString()}`);
 
 // Not process.exit(): crashes libuv on Windows after this much network I/O

@@ -5,7 +5,7 @@ config({ path: ".env.local" });
 const { clarify } = await import("@/compiler/clarify");
 const { answersFor } = await import("@/lib/clarify-types");
 
-// Checks the clarify step's guesses. Each case costs one flash-lite call.
+// Checks the clarify step's guesses. Each case costs one summary-tier call.
 //   npm run clarify
 
 interface Case {

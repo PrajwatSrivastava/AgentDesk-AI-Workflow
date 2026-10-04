@@ -1,5 +1,6 @@
 import { WorkflowSpec, WorkflowSpecShape } from "@/core/spec";
 import { addUsage, EMPTY_USAGE, generateObject, type LlmMessage, type LlmUsage } from "@/lib/llm";
+import { confirmedApproval } from "./clarify";
 import { normalizeSpec } from "./normalize";
 import { compilerSystemPrompt, compilerUserMessage } from "./prompt";
 import { validateSpec } from "./validate";
@@ -26,7 +27,7 @@ export interface CompileRequest {
 // ~1k tokens for an 8-step spec plus room for reasoning tokens.
 const MAX_SPEC_TOKENS = 4000;
 
-// One repair turn. The schema is enforced by Gemini, and longer repair loops rarely converge.
+// One repair turn. The schema is enforced by the provider, and longer repair loops rarely converge.
 const MAX_ATTEMPTS = 2;
 
 export async function compile(input: CompileRequest): Promise<CompileResult> {
@@ -51,7 +52,7 @@ export async function compile(input: CompileRequest): Promise<CompileResult> {
     addUsage(usage, result.usage);
     usage.model = result.model;
 
-    const problems = inspect(result.object);
+    const problems = inspect(result.object, input.clarifications);
     if (problems.spec) {
       return { ok: true, spec: problems.spec, usage, fixes: problems.fixes };
     }
@@ -81,8 +82,8 @@ export async function compile(input: CompileRequest): Promise<CompileResult> {
   };
 }
 
-// Runs even though Gemini enforces the schema. It's cheap and the last check before the executor.
-function inspect(object: unknown): {
+// Runs even though the provider enforces the schema. It's cheap and the last check before the executor.
+function inspect(object: unknown, clarifications?: string[]): {
   spec?: WorkflowSpec;
   problems: string[];
   fixes: string[];
@@ -104,8 +105,30 @@ function inspect(object: unknown): {
   // Fixing mechanical defects locally is cheaper and more reliable than asking the model.
   const { spec, fixes } = normalizeSpec(parsed.data);
 
-  const problems = validateSpec(spec);
+  const problems = [...validateSpec(spec), ...approvalProblems(spec, clarifications)];
   return problems.length === 0
     ? { spec, problems: [], fixes }
     : { problems, fixes };
+}
+
+// Models often leave out the optional `when`, which turns "ask me if it's urgent" into a pause on
+// every run. The approval answer confirmed on the card says exactly what was meant.
+function approvalProblems(spec: WorkflowSpec, clarifications?: string[]): string[] {
+  const human = spec.steps.filter((step) => step.type === "human");
+  switch (confirmedApproval(clarifications)) {
+    case "never":
+      return human.length === 0
+        ? []
+        : ["The user confirmed they don't want to be asked, so remove the human step."];
+    case "always":
+      return human.length > 0 && human.every((step) => !step.when)
+        ? []
+        : ["The user confirmed they want to approve every run, so add one human step without `when` before the sending step."];
+    case "when_flagged":
+      return human.length > 0 && human.every((step) => step.when)
+        ? []
+        : ["The user confirmed they want to be asked only when something looks important, so the human step needs a `when` that tests a boolean field such as `important` from the preceding ai step. Without `when` it pauses on every run."];
+    default:
+      return [];
+  }
 }

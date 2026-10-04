@@ -20,7 +20,7 @@ export function SetupNotice({ message }: { message: string }) {
           <li>
             <p className="font-medium">2. Add the remaining keys</p>
             <pre className="bg-paper text-muted mt-2 overflow-x-auto rounded-lg border border-rule p-3 font-mono text-xs">
-              {`GEMINI_API_KEY=...
+              {`NEBIUS_API_KEY=...
 ENCRYPTION_KEY=<64 hex chars>`}
             </pre>
             <p className="text-muted mt-2">

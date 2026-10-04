@@ -24,7 +24,7 @@ ${catalogForPrompt()}
 - **action** — calls one of the actions above. Fields: \`id\`, \`type\`, \`app\`, \`action\`, \`params\`.
 - **ai** — sends text to a language model and gets structured fields back. Fields: \`id\`, \`type\`, \`prompt\`, \`outputSchema\`. Use this to summarise, classify, judge relevance or draft copy.
 - **filter** — stops the run when a condition is false. Fields: \`id\`, \`type\`, \`condition\`. A stopped run is recorded as "skipped", which is the normal outcome when there is nothing to report.
-- **human** — pauses for a person to approve before the run continues. Fields: \`id\`, \`type\`, \`message\`, optional \`when\`, optional \`shows\`.
+- **human** — pauses for a person to approve before the run continues. Fields: \`id\`, \`type\`, optional \`when\`, \`message\`, optional \`shows\`.
 - **notify** — same as action, but a failure is tolerated and the run continues. Use it for a secondary copy of a message, never for the primary delivery.
 
 # Referencing earlier data

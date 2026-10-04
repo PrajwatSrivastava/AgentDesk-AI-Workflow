@@ -34,7 +34,7 @@ export type Condition = z.infer<typeof Condition>;
 
 // Flat field->type map. Nested schemas are harder for the model to emit correctly, so the one
 // list type is a list of records with string fields only: "{name,deadline,url}[]".
-// The pattern stays simple because it is also sent to Gemini as part of the compiler's schema.
+// The pattern stays simple because it is also sent to the model as part of the compiler's schema.
 const outputFieldType = z
   .string()
   .regex(
@@ -80,12 +80,14 @@ const FilterStep = z.object({
 const HumanStep = z.object({
   ...baseStep,
   type: z.literal("human"),
-  message: z.string().min(1).describe("what the approver is being asked"),
   // Short describe() text: it goes into the constrained-decoding schema on every request.
   // Compiler fixture 1 checks that `when` is set for conditional requests and omitted otherwise.
+  // Before `message`, as in the prompt's worked example: decoders that write fields in schema order
+  // (Nebius/vLLM) otherwise get past `message`, follow the example on to `shows` and drop `when`.
   when: Condition.optional().describe(
     "condition for pausing; omit to pause on every run",
   ),
+  message: z.string().min(1).describe("what the approver is being asked"),
   shows: z.array(z.string()).default([]).describe("template refs to render as context"),
 });
 
